@@ -1,0 +1,5 @@
+version: v1
+repository:
+  types: [service]
+  name: hyperfleet-operator
+  description: Kubernetes operator for HyperFleet cluster lifecycle management
