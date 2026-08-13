@@ -33,7 +33,7 @@ spec:
       # TODO(user): Uncomment the following code to configure the nodeAffinity expression
       # according to the platforms which are supported by your solution.
       # It is considered best practice to support multiple architectures. You can
-      # build your manager image using the makefile target image-build.
+      # build your manager image using the makefile target docker-buildx.
       # affinity:
       #   nodeAffinity:
       #     requiredDuringSchedulingIgnoredDuringExecution:
@@ -65,12 +65,8 @@ spec:
           - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
-        ports:
-        - containerPort: 8081
-          name: health
-          protocol: TCP
+        ports: []
         securityContext:
-          readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
             drop:
