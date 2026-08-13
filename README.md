@@ -1,5 +1,5 @@
 # hyperfleet-operator
-A Kubernetes operator that packages and delivers HyperFleet.
+// TODO(user): Add simple overview of use/purpose
 
 ## Description
 // TODO(user): An in-depth paragraph about your project and overview of use
@@ -7,7 +7,7 @@ A Kubernetes operator that packages and delivers HyperFleet.
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.6+
+- go version v1.24.0+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
@@ -16,7 +16,7 @@ A Kubernetes operator that packages and delivers HyperFleet.
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
-make image-build-push IMG=<some-registry>/hyperfleet-operator:tag
+make docker-build docker-push IMG=<some-registry>/hyperfleet-operator:tag
 ```
 
 **NOTE:** This image ought to be published in the personal registry you specified.
@@ -97,7 +97,7 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/hyperfleet-operator/<ta
 1. Build the chart using the optional helm plugin
 
 ```sh
-kubebuilder edit --plugins=helm/v2-alpha
+operator-sdk edit --plugins=helm/v1-alpha
 ```
 
 2. See that a chart was generated under 'dist/chart', and users
@@ -112,16 +112,6 @@ is manually re-applied afterwards.
 
 ## Contributing
 // TODO(user): Add detailed information on how you would like others to contribute to this project
-// Update this with more infor
-# Next Steps:
-
-kubebuilder create api --group hyperfleet  --version v1alpha --kind HyperFleetConfig
-
-# Create updated binary
-# Will run make generate and make manifests
-make build 
-
-# Add logic in the reconcile loop
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
 
