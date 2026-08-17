@@ -23,48 +23,73 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	hyperfleetv1alpha "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha"
+	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
 var _ = Describe("HyperFleetConfig Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+		// HyperFleetConfig is a cluster-scoped singleton: the only permitted name
+		// is "cluster" and there is no namespace.
+		const resourceName = hyperfleetv1alpha1.SingletonName
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Name: resourceName,
 		}
-		hyperfleetconfig := &hyperfleetv1alpha.HyperFleetConfig{}
+		hyperfleetconfig := &hyperfleetv1alpha1.HyperFleetConfig{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind HyperFleetConfig")
 			err := k8sClient.Get(ctx, typeNamespacedName, hyperfleetconfig)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &hyperfleetv1alpha.HyperFleetConfig{
+			if errors.IsNotFound(err) {
+				resource := &hyperfleetv1alpha1.HyperFleetConfig{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
+						Name: resourceName,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
+						Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
+						API: hyperfleetv1alpha1.APISpec{
+							Database: hyperfleetv1alpha1.DatabaseSpec{
+								SecretRef: hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-db"},
+							},
+							Auth: hyperfleetv1alpha1.AuthSpec{
+								Enabled:  ptr.To(true),
+								Issuer:   "https://issuer.example.com",
+								Audience: "hyperfleet-api",
+							},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			} else {
+				// A Get error other than NotFound means the fixture state is unknown;
+				// fail loudly instead of silently skipping the Create and letting the
+				// reconcile spec pass without its required resource.
+				Expect(err).NotTo(HaveOccurred())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &hyperfleetv1alpha.HyperFleetConfig{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
 			By("Cleanup the specific resource instance HyperFleetConfig")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			resource := &hyperfleetv1alpha1.HyperFleetConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+			}
+			// NotFound means cleanup already happened; any other delete error
+			// must fail the test loudly instead of being masked as an Eventually
+			// timeout below.
+			if err := k8sClient.Delete(ctx, resource); err != nil && !errors.IsNotFound(err) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, typeNamespacedName, &hyperfleetv1alpha1.HyperFleetConfig{})
+				return errors.IsNotFound(err)
+			}).Should(BeTrue())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
@@ -77,8 +102,6 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
 		})
 	})
 })

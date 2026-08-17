@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	hyperfleetv1alpha "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha"
+	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
 // HyperFleetConfigReconciler reconciles a HyperFleetConfig object
@@ -57,7 +57,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 // SetupWithManager sets up the controller with the Manager.
 func (r *HyperFleetConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&hyperfleetv1alpha.HyperFleetConfig{}).
+		For(&hyperfleetv1alpha1.HyperFleetConfig{}).
 		Named("hyperfleetconfig").
 		Complete(r)
 }

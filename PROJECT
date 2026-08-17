@@ -13,11 +13,11 @@ repo: github.com/openshift-hyperfleet/hyperfleet-operator
 resources:
 - api:
     crdVersion: v1
-    namespaced: true
+    namespaced: false
   controller: true
   domain: redhat.com
   group: hyperfleet
   kind: HyperFleetConfig
-  path: github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha
-  version: v1alpha
+  path: github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

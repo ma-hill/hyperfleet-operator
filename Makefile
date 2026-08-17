@@ -1,3 +1,12 @@
+# GOTOOLCHAIN pins the Go toolchain for all build/generate/test targets.
+# The tooling module (tools/go.mod) requires Go >= 1.26, while the root module
+# keeps its language level at `go 1.24` so the pinned golangci-lint (built with
+# go1.24) still accepts go.mod. Forcing one toolchain here — rather than a
+# go.mod `toolchain` directive — avoids GOTOOLCHAIN=auto switching mid-build,
+# which breaks coverage ("go: no such tool covdata"). go1.26.5 is the first
+# release carrying the fixes for CVE-2026-39822 and CVE-2026-42505.
+export GOTOOLCHAIN ?= go1.26.5
+
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
@@ -131,7 +140,11 @@ KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 .PHONY: test
 test: manifests generate fmt vet ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	# Resolve envtest assets in the recipe shell (via $$(...)) rather than make's
+	# $(shell ...): the latter runs at parse time and does not inherit the
+	# exported GOTOOLCHAIN, so setup-envtest (a tools/go.mod tool needing Go 1.26)
+	# would run under the wrong toolchain and yield an empty KUBEBUILDER_ASSETS.
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist

@@ -37,7 +37,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	hyperfleetv1alpha "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha"
+	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -50,7 +50,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(hyperfleetv1alpha.AddToScheme(scheme))
+	utilruntime.Must(hyperfleetv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
