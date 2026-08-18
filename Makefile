@@ -123,7 +123,6 @@ vet: ## Run go vet against code.
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
-
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # CertManager is installed by default; skip with:
@@ -131,7 +130,9 @@ KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 .PHONY: test
 test: manifests generate fmt vet ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	ENVTEST_CACHE_DIR=$$(mktemp -d -t envtest-XXXXXXXXXX) && chmod 0700 $$ENVTEST_CACHE_DIR && \
+	XDG_CACHE_HOME=$$ENVTEST_CACHE_DIR KUBEBUILDER_ASSETS="$$(XDG_CACHE_HOME=$$ENVTEST_CACHE_DIR $(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out; \
+	rm -rf $$ENVTEST_CACHE_DIR
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
