@@ -56,12 +56,12 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 						Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
 						API: hyperfleetv1alpha1.APISpec{
 							Database: hyperfleetv1alpha1.DatabaseSpec{
-								SecretRef: hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-db"},
+								SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
 							},
 							Auth: hyperfleetv1alpha1.AuthSpec{
 								Enabled:  ptr.To(true),
-								Issuer:   "https://issuer.example.com",
-								Audience: "hyperfleet-api",
+								Issuer:   testIssuerURL,
+								Audience: testAudience,
 							},
 						},
 					},

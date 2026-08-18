@@ -31,6 +31,15 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
+// Repeated fixture values are declared once as constants: goconst flags any
+// string literal that recurs three or more times in a package, and a single
+// definition keeps the specs in sync.
+const (
+	testDBSecretName = "hyperfleet-db"
+	testIssuerURL    = "https://issuer.example.com"
+	testAudience     = "hyperfleet-api"
+)
+
 // These specs exercise the CRD's declarative validation and defaulting through a
 // real API server (envtest). They assert the schema contract for HYPERFLEET-1406;
 // no reconciler behavior is involved.
@@ -47,12 +56,12 @@ func validHyperFleetConfig() *hyperfleetv1alpha1.HyperFleetConfig {
 			Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
 			API: hyperfleetv1alpha1.APISpec{
 				Database: hyperfleetv1alpha1.DatabaseSpec{
-					SecretRef: hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-db"},
+					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
 				},
 				Auth: hyperfleetv1alpha1.AuthSpec{
 					Enabled:  ptr.To(true),
-					Issuer:   "https://issuer.example.com",
-					Audience: "hyperfleet-api",
+					Issuer:   testIssuerURL,
+					Audience: testAudience,
 				},
 			},
 		},
@@ -213,7 +222,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// A long-but-valid https URL isolates MaxLength: isURL, scheme and host
 			// all pass, so only the length bound can reject it.
 			obj := validHyperFleetConfig()
-			obj.Spec.API.Auth.Issuer = "https://issuer.example.com/" + strings.Repeat("a", 2048)
+			obj.Spec.API.Auth.Issuer = testIssuerURL + "/" + strings.Repeat("a", 2048)
 			err := k8sClient.Create(ctx, obj)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("may not be more than 2048 bytes"))
@@ -228,7 +237,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			u.Object["spec"].(map[string]interface{})["api"].(map[string]interface{})["auth"] =
 				map[string]interface{}{
 					"enabled":  true,
-					"issuer":   "https://issuer.example.com",
+					"issuer":   testIssuerURL,
 					"audience": "",
 				}
 			err := k8sClient.Create(ctx, u)
@@ -392,12 +401,12 @@ func minimalUnstructured() *unstructured.Unstructured {
 		"bundle": string(hyperfleetv1alpha1.BundleCloudCAPI),
 		"api": map[string]interface{}{
 			"database": map[string]interface{}{
-				"secretRef": map[string]interface{}{"name": "hyperfleet-db"},
+				"secretRef": map[string]interface{}{"name": testDBSecretName},
 			},
 			"auth": map[string]interface{}{
 				// enabled omitted -> defaults to true
-				"issuer":   "https://issuer.example.com",
-				"audience": "hyperfleet-api",
+				"issuer":   testIssuerURL,
+				"audience": testAudience,
 			},
 			// profile omitted -> defaults to "small"
 		},

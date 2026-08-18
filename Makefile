@@ -1,12 +1,3 @@
-# GOTOOLCHAIN pins the Go toolchain for all build/generate/test targets.
-# The tooling module (tools/go.mod) requires Go >= 1.26, while the root module
-# keeps its language level at `go 1.24` so the pinned golangci-lint (built with
-# go1.24) still accepts go.mod. Forcing one toolchain here — rather than a
-# go.mod `toolchain` directive — avoids GOTOOLCHAIN=auto switching mid-build,
-# which breaks coverage ("go: no such tool covdata"). go1.26.5 is the first
-# release carrying the fixes for CVE-2026-39822 and CVE-2026-42505.
-export GOTOOLCHAIN ?= go1.26.5
-
 # VERSION defines the project version for the bundle.
 # Update this value when you upgrade the version of your project.
 # To re-generate a bundle for another specific version without changing the standard setup, you can:
@@ -132,6 +123,15 @@ vet: ## Run go vet against code.
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
+# On Linux, setup-envtest stores its downloaded control-plane binaries under
+# $XDG_DATA_HOME, falling back to $HOME/.local/share (store/helpers.go). OpenShift
+# CI's unit step runs with HOME=/ (unwritable) and no XDG_DATA_HOME set, so the
+# store resolves to /.local/share and setup-envtest dies with "mkdir /.local:
+# permission denied" — leaving KUBEBUILDER_ASSETS empty and the suite unable to
+# find etcd. Point XDG_DATA_HOME at a writable path inside the repo so the store
+# is always creatable. `?=` lets a developer or CI override it.
+export XDG_DATA_HOME ?= $(ROOT_DIR)_output/.local/share
+
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -140,11 +140,21 @@ KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 .PHONY: test
 test: manifests generate fmt vet ## Run tests.
-	# Resolve envtest assets in the recipe shell (via $$(...)) rather than make's
-	# $(shell ...): the latter runs at parse time and does not inherit the
-	# exported GOTOOLCHAIN, so setup-envtest (a tools/go.mod tool needing Go 1.26)
-	# would run under the wrong toolchain and yield an empty KUBEBUILDER_ASSETS.
-	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	# Honor a KUBEBUILDER_ASSETS supplied by the environment (e.g. an OpenShift CI
+	# pod that pre-bakes the envtest control-plane binaries); fall back to
+	# setup-envtest only when it is unset. Resolve that fallback in the recipe
+	# shell (via $$(...)) rather than make's $(shell ...): $(shell ...) runs at
+	# parse time on every make invocation (even unrelated targets) and cannot see
+	# a KUBEBUILDER_ASSETS exported into the recipe environment.
+	#
+	# Assign on its own line so that, under .SHELLFLAGS -e, a setup-envtest failure
+	# aborts here with its real error instead of being masked by go test's exit
+	# status (a bare `VAR="$$(cmd)" go test` reports go test's status, not cmd's).
+	# Then require a non-empty path so a silent empty resolve can't launch the
+	# suite with no control-plane binaries ("etcd: executable file not found").
+	assets="$${KUBEBUILDER_ASSETS:-$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)}"; \
+	[ -n "$$assets" ] || { echo "error: KUBEBUILDER_ASSETS is empty; setup-envtest did not resolve envtest binaries" >&2; exit 1; }; \
+	KUBEBUILDER_ASSETS="$$assets" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
