@@ -23,10 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
@@ -48,24 +45,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			By("creating the custom resource for the Kind HyperFleetConfig")
 			err := k8sClient.Get(ctx, typeNamespacedName, hyperfleetconfig)
 			if errors.IsNotFound(err) {
-				resource := &hyperfleetv1alpha1.HyperFleetConfig{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: resourceName,
-					},
-					Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
-						Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
-						API: hyperfleetv1alpha1.APISpec{
-							Database: hyperfleetv1alpha1.DatabaseSpec{
-								SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
-							},
-							Auth: hyperfleetv1alpha1.AuthSpec{
-								Enabled:  ptr.To(true),
-								Issuer:   testIssuerURL,
-								Audience: testAudience,
-							},
-						},
-					},
-				}
+				resource := validHyperFleetConfig()
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			} else {
 				// A Get error other than NotFound means the fixture state is unknown;
@@ -73,24 +53,12 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 				// reconcile spec pass without its required resource.
 				Expect(err).NotTo(HaveOccurred())
 			}
+			// The singleton now exists (created just above or already present), so
+			// schedule its teardown. DeferCleanup runs after the spec and replaces a
+			// blanket AfterEach; deleteSingletonAndWait lives in suite_test.go.
+			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
 
-		AfterEach(func() {
-			By("Cleanup the specific resource instance HyperFleetConfig")
-			resource := &hyperfleetv1alpha1.HyperFleetConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
-			}
-			// NotFound means cleanup already happened; any other delete error
-			// must fail the test loudly instead of being masked as an Eventually
-			// timeout below.
-			if err := k8sClient.Delete(ctx, resource); err != nil && !errors.IsNotFound(err) {
-				Expect(err).NotTo(HaveOccurred())
-			}
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, typeNamespacedName, &hyperfleetv1alpha1.HyperFleetConfig{})
-				return errors.IsNotFound(err)
-			}).Should(BeTrue())
-		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &HyperFleetConfigReconciler{

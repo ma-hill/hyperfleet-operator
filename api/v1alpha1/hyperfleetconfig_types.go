@@ -102,17 +102,31 @@ const (
 // the operator's own namespace: because HyperFleetConfig is cluster-scoped, no
 // namespace field is exposed (name-only + operator-namespace convention, decided
 // in the HYPERFLEET-1406 API review).
+//
+// TODO(HYPERFLEET-1512): the operator-namespace constraint is convention-only
+// today — the schema cannot enforce it (CEL sees no cross-object/namespace
+// state; ADR-0019 rules out webhooks). The reconciler must enforce it (resolve
+// the Secret in the operator's own namespace and surface a Degraded condition
+// when it is missing) once it lands.
 type SecretReference struct {
 	// name is the name of the Secret in the operator's namespace. It must be a
-	// valid DNS-1123 subdomain (the same constraint the API server places on
-	// Secret names) so an unresolvable reference is rejected at admission rather
-	// than failing opaquely when the reference is later resolved.
+	// valid DNS-1123 subdomain, matching what k8s.io/apimachinery/pkg/util/validation
+	// enforces for Secret names (IsDNS1123Subdomain, max length 253), so an
+	// unresolvable reference is rejected at admission rather than failing opaquely
+	// when the reference is later resolved.
 	//
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
+
+	// Maintainer note (free-standing so it stays out of the generated CRD
+	// description): the MaxLength and Pattern markers on name are literal copies of
+	// apimachinery's DNS1123SubdomainMaxLength (253) and dns1123SubdomainFmt. They
+	// can't reference those symbols — controller-gen markers accept only literal
+	// values, and the format constant is unexported — so keep them in sync by hand
+	// if k8s.io/apimachinery/pkg/util/validation ever changes.
 }
 
 // DatabaseSpec configures the HyperFleet API's connection to its external
@@ -202,7 +216,7 @@ type APISpec struct {
 }
 
 // HyperFleetConfigSpec defines the desired state of HyperFleetConfig. It captures
-// partner intent only; internal machinery (broker, adapters, Sentinel) is never
+// partner intent only; internal machinery (broker, adapters, sentinel) is never
 // expressed here.
 type HyperFleetConfigSpec struct {
 	// bundle selects one of the operator-internal bundle definitions. It is

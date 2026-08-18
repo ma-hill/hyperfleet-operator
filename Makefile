@@ -140,20 +140,28 @@ export XDG_DATA_HOME ?= $(ROOT_DIR)_output/.local/share
 
 .PHONY: test
 test: manifests generate fmt vet ## Run tests.
-	# Honor a KUBEBUILDER_ASSETS supplied by the environment (e.g. an OpenShift CI
-	# pod that pre-bakes the envtest control-plane binaries); fall back to
-	# setup-envtest only when it is unset. Resolve that fallback in the recipe
-	# shell (via $$(...)) rather than make's $(shell ...): $(shell ...) runs at
-	# parse time on every make invocation (even unrelated targets) and cannot see
-	# a KUBEBUILDER_ASSETS exported into the recipe environment.
+	# Resolve the envtest control-plane binaries. We deliberately do NOT honor the
+	# ambient KUBEBUILDER_ASSETS here: it is the standard variable envtest tooling
+	# exports, so a stale value in a developer's shell (or leftover from another
+	# repo/branch) would silently bypass the ENVTEST_K8S_VERSION pin and run the
+	# suite against the wrong control-plane version. Instead, an explicit
+	# CI_KUBEBUILDER_ASSETS opt-in lets an environment that pre-bakes the binaries
+	# supply its own path without that footgun; otherwise we fall back to
+	# setup-envtest at the pinned version. (Neither our GitHub Actions nor the
+	# OpenShift CI unit step pre-bakes today, so in practice the fallback is what
+	# executes everywhere.)
+	#
+	# Resolve that fallback in the recipe shell (via $$(...)) rather than make's
+	# $(shell ...): $(shell ...) runs at parse time on every make invocation (even
+	# unrelated targets) and cannot see a value exported into the recipe environment.
 	#
 	# Assign on its own line so that, under .SHELLFLAGS -e, a setup-envtest failure
 	# aborts here with its real error instead of being masked by go test's exit
 	# status (a bare `VAR="$$(cmd)" go test` reports go test's status, not cmd's).
 	# Then require a non-empty path so a silent empty resolve can't launch the
 	# suite with no control-plane binaries ("etcd: executable file not found").
-	assets="$${KUBEBUILDER_ASSETS:-$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)}"; \
-	[ -n "$$assets" ] || { echo "error: KUBEBUILDER_ASSETS is empty; setup-envtest did not resolve envtest binaries" >&2; exit 1; }; \
+	assets="$${CI_KUBEBUILDER_ASSETS:-$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)}"; \
+	[ -n "$$assets" ] || { echo "error: envtest assets path is empty; setup-envtest did not resolve envtest binaries (set CI_KUBEBUILDER_ASSETS to override)" >&2; exit 1; }; \
 	KUBEBUILDER_ASSETS="$$assets" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e

@@ -72,28 +72,17 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 	ctx := context.Background()
 
 	// Every valid object is forced to the same name ("cluster"), so specs collide
-	// unless the singleton is torn down between them.
-	AfterEach(func() {
-		obj := &hyperfleetv1alpha1.HyperFleetConfig{
-			ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
-		}
-		// A negative spec may have prevented creation, so NotFound is a valid
-		// "already clean" outcome; any other delete error must fail the test
-		// loudly rather than be masked as an Eventually timeout below.
-		if err := k8sClient.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
-			Expect(err).NotTo(HaveOccurred())
-		}
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: hyperfleetv1alpha1.SingletonName},
-				&hyperfleetv1alpha1.HyperFleetConfig{})
-			return errors.IsNotFound(err)
-		}).Should(BeTrue())
-	})
+	// unless the singleton is torn down between them. Rather than a blanket
+	// AfterEach, each spec that actually creates the singleton schedules its own
+	// teardown via DeferCleanup(deleteSingletonAndWait, ctx) right after a
+	// successful Create: the ~16 negative specs never create, so they register no
+	// cleanup and pay nothing. deleteSingletonAndWait lives in suite_test.go and
+	// is shared with the reconciler specs.
 
 	Context("singleton enforcement", func() {
 		It("accepts the resource when named 'cluster'", func() {
 			Expect(k8sClient.Create(ctx, validHyperFleetConfig())).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
 
 		It("rejects any name other than 'cluster'", func() {
@@ -108,6 +97,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// The name-pin CEL rule forces every instance to the name "cluster";
 			// cluster-scoped name uniqueness then makes the second create collide.
 			Expect(k8sClient.Create(ctx, validHyperFleetConfig())).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 			err := k8sClient.Create(ctx, validHyperFleetConfig())
 			Expect(err).To(HaveOccurred())
 			Expect(errors.IsAlreadyExists(err)).To(BeTrue())
@@ -124,6 +114,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 				obj := validHyperFleetConfig()
 				obj.Spec.Bundle = bundle
 				Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+				DeferCleanup(deleteSingletonAndWait, ctx)
 			})
 		}
 
@@ -132,6 +123,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 				obj := validHyperFleetConfig()
 				obj.Spec.API.Profile = profile
 				Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+				DeferCleanup(deleteSingletonAndWait, ctx)
 			})
 		}
 
@@ -156,6 +148,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 		It("rejects changing the bundle after creation", func() {
 			obj := validHyperFleetConfig()
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 
 			obj.Spec.Bundle = hyperfleetv1alpha1.BundleOnPremAgent
 			err := k8sClient.Update(ctx, obj)
@@ -168,6 +161,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// updatable. This proves self==oldSelf was not applied too broadly.
 			obj := validHyperFleetConfig()
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 
 			obj.Spec.API.Profile = hyperfleetv1alpha1.SizingProfileLarge
 			Expect(k8sClient.Update(ctx, obj)).To(Succeed())
@@ -257,6 +251,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			obj := validHyperFleetConfig()
 			obj.Spec.API.Auth = hyperfleetv1alpha1.AuthSpec{Enabled: ptr.To(false)}
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
 	})
 
@@ -298,12 +293,27 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 				SecretRef: hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-tls"},
 			}
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
 
 		It("rejects a TLS block with an empty secret name", func() {
 			obj := validHyperFleetConfig()
 			obj.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
 				SecretRef: hyperfleetv1alpha1.SecretReference{Name: ""},
+			}
+			err := k8sClient.Create(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("tls.secretRef.name"))
+		})
+
+		It("rejects a TLS secret name that is not a DNS-1123 subdomain", func() {
+			// SecretReference.Name's Pattern marker is shared with the database path,
+			// but the generated CRD inlines an independent copy at each field; assert
+			// it is enforced at the tls.secretRef.name path too, mirroring the
+			// database case in the "required fields" context.
+			obj := validHyperFleetConfig()
+			obj.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
+				SecretRef: hyperfleetv1alpha1.SecretReference{Name: "Invalid_Name"},
 			}
 			err := k8sClient.Create(ctx, obj)
 			Expect(err).To(HaveOccurred())
@@ -366,6 +376,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 		It("populates profile and auth.enabled defaults on a minimal object", func() {
 			u := minimalUnstructured()
 			Expect(k8sClient.Create(ctx, u)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 
 			got := &hyperfleetv1alpha1.HyperFleetConfig{}
 			Expect(k8sClient.Get(ctx,
@@ -381,6 +392,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			obj := validHyperFleetConfig()
 			obj.Spec.API.Auth.Enabled = nil
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
 
 			got := &hyperfleetv1alpha1.HyperFleetConfig{}
 			Expect(k8sClient.Get(ctx,

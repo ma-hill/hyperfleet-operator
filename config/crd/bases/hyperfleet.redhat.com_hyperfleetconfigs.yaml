@@ -56,7 +56,7 @@ spec:
           spec:
             description: |-
               HyperFleetConfigSpec defines the desired state of HyperFleetConfig. It captures
-              partner intent only; internal machinery (broker, adapters, Sentinel) is never
+              partner intent only; internal machinery (broker, adapters, sentinel) is never
               expressed here.
             properties:
               api:
@@ -114,9 +114,10 @@ spec:
                           name:
                             description: |-
                               name is the name of the Secret in the operator's namespace. It must be a
-                              valid DNS-1123 subdomain (the same constraint the API server places on
-                              Secret names) so an unresolvable reference is rejected at admission rather
-                              than failing opaquely when the reference is later resolved.
+                              valid DNS-1123 subdomain, matching what k8s.io/apimachinery/pkg/util/validation
+                              enforces for Secret names (IsDNS1123Subdomain, max length 253), so an
+                              unresolvable reference is rejected at admission rather than failing opaquely
+                              when the reference is later resolved.
                             maxLength: 253
                             minLength: 1
                             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -149,9 +150,10 @@ spec:
                           name:
                             description: |-
                               name is the name of the Secret in the operator's namespace. It must be a
-                              valid DNS-1123 subdomain (the same constraint the API server places on
-                              Secret names) so an unresolvable reference is rejected at admission rather
-                              than failing opaquely when the reference is later resolved.
+                              valid DNS-1123 subdomain, matching what k8s.io/apimachinery/pkg/util/validation
+                              enforces for Secret names (IsDNS1123Subdomain, max length 253), so an
+                              unresolvable reference is rejected at admission rather than failing opaquely
+                              when the reference is later resolved.
                             maxLength: 253
                             minLength: 1
                             pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
