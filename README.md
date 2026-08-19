@@ -1,13 +1,15 @@
 # hyperfleet-operator
-// TODO(user): Add simple overview of use/purpose
+
+A Kubernetes operator for HyperFleet cluster lifecycle management.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+
+hyperfleet-operator packages and delivers HyperFleet as a standard Kubernetes operator, installed and managed through OLM. It exposes a single cluster-scoped custom resource, `HyperFleetConfig`, as the entire partner-facing surface: install, configure, and observe HyperFleet through that one CR and its status conditions, with everything else the operator manages kept internal.
 
 ## Getting Started
 
 ### Prerequisites
-- go version v1.24.0+
+- go version v1.26.0+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
