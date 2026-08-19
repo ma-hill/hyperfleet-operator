@@ -8,11 +8,16 @@ namespace: hyperfleet-operator-system
 # field above.
 namePrefix: hyperfleet-operator-
 
-# Labels to add to all resources and selectors.
-#labels:
-#- includeSelectors: true
-#  pairs:
-#    someName: someValue
+# Labels to add to all resources. includeSelectors is false so these land only in
+# metadata.labels (for `kubectl get -l app.kubernetes.io/name=...` discovery) and are
+# NOT injected into Deployment/Service selectors, which are immutable on in-place
+# updates. This also backfills the labels onto controller-gen-managed files
+# (rbac/role.yaml, metrics roles) and the CRD, which cannot carry them inline.
+labels:
+- includeSelectors: false
+  pairs:
+    app.kubernetes.io/name: hyperfleet-operator
+    app.kubernetes.io/managed-by: kustomize
 
 resources:
 - ../crd

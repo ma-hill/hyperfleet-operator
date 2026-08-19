@@ -25,6 +25,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,7 +35,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	hyperfleetv1alpha "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha"
+	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -59,7 +62,7 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = hyperfleetv1alpha.AddToScheme(scheme.Scheme)
+	err = hyperfleetv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
@@ -91,6 +94,31 @@ var _ = AfterSuite(func() {
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })
+
+// deleteSingletonAndWait removes the "cluster" singleton and blocks until the
+// API server confirms it is gone, so each spec starts from a clean slate. Specs
+// schedule it via DeferCleanup immediately after a successful Create (both the
+// CRD-validation and the reconciler specs force the same singleton name, so they
+// would otherwise collide); the negative specs never create and so never
+// schedule it. The cleanup is still idempotent by design: NotFound on delete is
+// a valid "already clean" outcome, while any other delete error fails the
+// calling spec loudly rather than being masked as an Eventually timeout below.
+// GinkgoHelper attributes any failure here to the spec that scheduled it.
+func deleteSingletonAndWait(ctx context.Context) {
+	GinkgoHelper()
+	obj := &hyperfleetv1alpha1.HyperFleetConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
+	}
+	if err := k8sClient.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+		Expect(err).NotTo(HaveOccurred())
+	}
+	Eventually(func() bool {
+		err := k8sClient.Get(ctx,
+			types.NamespacedName{Name: hyperfleetv1alpha1.SingletonName},
+			&hyperfleetv1alpha1.HyperFleetConfig{})
+		return errors.IsNotFound(err)
+	}).Should(BeTrue())
+}
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
 // ENVTEST-based tests depend on specific binaries, usually located in paths set by

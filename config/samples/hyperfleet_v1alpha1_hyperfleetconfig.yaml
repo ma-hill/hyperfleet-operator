@@ -1,0 +1,27 @@
+apiVersion: hyperfleet.redhat.com/v1alpha1
+kind: HyperFleetConfig
+metadata:
+  labels:
+    app.kubernetes.io/name: hyperfleet-operator
+    app.kubernetes.io/managed-by: kustomize
+  # HyperFleetConfig is a cluster-scoped singleton; the only permitted name is
+  # "cluster". It has no namespace.
+  name: cluster
+spec:
+  # bundle selects the deployment shape. It is immutable after creation.
+  # One of: cloud-capi, onprem-agent.
+  bundle: cloud-capi
+  api:
+    # database.secretRef points at a Secret in the operator's namespace holding
+    # keys: db.host, db.port, db.name, db.user, db.password.
+    database:
+      secretRef:
+        name: hyperfleet-db
+    # auth configures partner-facing JWT authentication intent. issuer and
+    # audience are required when enabled is true (the default).
+    auth:
+      enabled: true
+      issuer: https://issuer.example.com
+      audience: hyperfleet-api
+    # profile is a sizing hint. One of: small (default), medium, large.
+    profile: small

@@ -1,4 +1,4 @@
 ## Append samples of your project ##
 resources:
-- hyperfleet_v1alpha_hyperfleetconfig.yaml
+- hyperfleet_v1alpha1_hyperfleetconfig.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
