@@ -205,7 +205,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// https XValidation alone) must reject it. Only unstructured can carry an
 			// explicit empty scalar; the typed client omits it via omitempty.
 			u := minimalUnstructured()
-			auth := u.Object["spec"].(map[string]interface{})["api"].(map[string]interface{})["auth"].(map[string]interface{})
+			auth := u.Object["spec"].(map[string]any)["api"].(map[string]any)["auth"].(map[string]any)
 			auth["issuer"] = ""
 			err := k8sClient.Create(ctx, u)
 			Expect(err).To(HaveOccurred())
@@ -228,8 +228,8 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// unstructured object can carry an explicit empty scalar (the typed client
 			// omits it via omitempty).
 			u := minimalUnstructured()
-			u.Object["spec"].(map[string]interface{})["api"].(map[string]interface{})["auth"] =
-				map[string]interface{}{
+			u.Object["spec"].(map[string]any)["api"].(map[string]any)["auth"] =
+				map[string]any{
 					"enabled":  true,
 					"issuer":   testIssuerURL,
 					"audience": "",
@@ -337,7 +337,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 		// typed client always sends.
 		It("rejects a config with no bundle", func() {
 			u := minimalUnstructured()
-			delete(u.Object["spec"].(map[string]interface{}), "bundle")
+			delete(u.Object["spec"].(map[string]any), "bundle")
 			err := k8sClient.Create(ctx, u)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("spec.bundle"))
@@ -345,7 +345,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 
 		It("rejects a config with no api", func() {
 			u := minimalUnstructured()
-			delete(u.Object["spec"].(map[string]interface{}), "api")
+			delete(u.Object["spec"].(map[string]any), "api")
 			err := k8sClient.Create(ctx, u)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("spec.api"))
@@ -353,7 +353,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 
 		It("rejects an api with no database", func() {
 			u := minimalUnstructured()
-			api := u.Object["spec"].(map[string]interface{})["api"].(map[string]interface{})
+			api := u.Object["spec"].(map[string]any)["api"].(map[string]any)
 			delete(api, "database")
 			err := k8sClient.Create(ctx, u)
 			Expect(err).To(HaveOccurred())
@@ -362,7 +362,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 
 		It("rejects an api with no auth", func() {
 			u := minimalUnstructured()
-			api := u.Object["spec"].(map[string]interface{})["api"].(map[string]interface{})
+			api := u.Object["spec"].(map[string]any)["api"].(map[string]any)
 			delete(api, "auth")
 			err := k8sClient.Create(ctx, u)
 			Expect(err).To(HaveOccurred())
@@ -409,13 +409,13 @@ func minimalUnstructured() *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(hyperfleetv1alpha1.GroupVersion.WithKind("HyperFleetConfig"))
 	u.SetName(hyperfleetv1alpha1.SingletonName)
-	u.Object["spec"] = map[string]interface{}{
+	u.Object["spec"] = map[string]any{
 		"bundle": string(hyperfleetv1alpha1.BundleCloudCAPI),
-		"api": map[string]interface{}{
-			"database": map[string]interface{}{
-				"secretRef": map[string]interface{}{"name": testDBSecretName},
+		"api": map[string]any{
+			"database": map[string]any{
+				"secretRef": map[string]any{"name": testDBSecretName},
 			},
-			"auth": map[string]interface{}{
+			"auth": map[string]any{
 				// enabled omitted -> defaults to true
 				"issuer":   testIssuerURL,
 				"audience": testAudience,
