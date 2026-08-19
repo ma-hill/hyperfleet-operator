@@ -123,46 +123,18 @@ vet: ## Run go vet against code.
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
-# On Linux, setup-envtest stores its downloaded control-plane binaries under
-# $XDG_DATA_HOME, falling back to $HOME/.local/share (store/helpers.go). OpenShift
-# CI's unit step runs with HOME=/ (unwritable) and no XDG_DATA_HOME set, so the
-# store resolves to /.local/share and setup-envtest dies with "mkdir /.local:
-# permission denied" — leaving KUBEBUILDER_ASSETS empty and the suite unable to
-# find etcd. Point XDG_DATA_HOME at a writable path inside the repo so the store
-# is always creatable. `?=` lets a developer or CI override it.
-export XDG_DATA_HOME ?= $(ROOT_DIR)_output/.local/share
-
-
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
 # CertManager is installed by default; skip with:
 # - CERT_MANAGER_INSTALL_SKIP=true
 
+.PHONY: setup-envtest
+setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserver) into the local bin directory.
+	$(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path
+
 .PHONY: test
-test: manifests generate fmt vet ## Run tests.
-	# Resolve the envtest control-plane binaries. We deliberately do NOT honor the
-	# ambient KUBEBUILDER_ASSETS here: it is the standard variable envtest tooling
-	# exports, so a stale value in a developer's shell (or leftover from another
-	# repo/branch) would silently bypass the ENVTEST_K8S_VERSION pin and run the
-	# suite against the wrong control-plane version. Instead, an explicit
-	# CI_KUBEBUILDER_ASSETS opt-in lets an environment that pre-bakes the binaries
-	# supply its own path without that footgun; otherwise we fall back to
-	# setup-envtest at the pinned version. (Neither our GitHub Actions nor the
-	# OpenShift CI unit step pre-bakes today, so in practice the fallback is what
-	# executes everywhere.)
-	#
-	# Resolve that fallback in the recipe shell (via $$(...)) rather than make's
-	# $(shell ...): $(shell ...) runs at parse time on every make invocation (even
-	# unrelated targets) and cannot see a value exported into the recipe environment.
-	#
-	# Assign on its own line so that, under .SHELLFLAGS -e, a setup-envtest failure
-	# aborts here with its real error instead of being masked by go test's exit
-	# status (a bare `VAR="$$(cmd)" go test` reports go test's status, not cmd's).
-	# Then require a non-empty path so a silent empty resolve can't launch the
-	# suite with no control-plane binaries ("etcd: executable file not found").
-	assets="$${CI_KUBEBUILDER_ASSETS:-$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) -p path)}"; \
-	[ -n "$$assets" ] || { echo "error: envtest assets path is empty; setup-envtest did not resolve envtest binaries (set CI_KUBEBUILDER_ASSETS to override)" >&2; exit 1; }; \
-	KUBEBUILDER_ASSETS="$$assets" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+test: manifests generate fmt vet setup-envtest ## Run tests.
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
