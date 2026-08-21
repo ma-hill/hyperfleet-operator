@@ -65,6 +65,18 @@ spec:
           - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
+        env:
+        # POD_NAMESPACE tells the operator which namespace to create operands in
+        # (the operator's own namespace). Sourced from the downward API.
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # RELATED_IMAGE_HYPERFLEET_API is the image used for the API operand.
+        # Follows the OLM relatedImages convention so it can be digest-pinned at
+        # bundle build time; override per environment as needed.
+        - name: RELATED_IMAGE_HYPERFLEET_API
+          value: quay.io/openshift-hyperfleet/hyperfleet-api:latest
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

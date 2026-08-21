@@ -202,9 +202,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// operatorNamespace is where all operands are created. It comes from the
+	// downward API (POD_NAMESPACE) in-cluster; the fallback keeps `make run` and
+	// local development working when the env var is absent. The fallback must
+	// match the deploy namespace in config/default/kustomization.yaml.
+	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	if operatorNamespace == "" {
+		operatorNamespace = "hyperfleet-operator-system"
+		setupLog.Info("POD_NAMESPACE not set; falling back to default operator namespace",
+			"namespace", operatorNamespace)
+	}
+
 	if err := (&controller.HyperFleetConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: operatorNamespace,
+		APIImage:          os.Getenv("RELATED_IMAGE_HYPERFLEET_API"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HyperFleetConfig")
 		os.Exit(1)
