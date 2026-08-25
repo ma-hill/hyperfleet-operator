@@ -179,9 +179,14 @@ lint-config: ## Verify golangci-lint linter configuration
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+# OPERATOR_NAMESPACE is the namespace the operator creates operands in. In-cluster
+# it comes from the downward API; for `make run` it defaults here so local dev works.
+# Override with e.g. `make run OPERATOR_NAMESPACE=my-ns`.
+OPERATOR_NAMESPACE ?= hyperfleet-system
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	OPERATOR_NAMESPACE=$(OPERATOR_NAMESPACE) go run ./cmd/main.go
 
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.

@@ -65,7 +65,7 @@ func deleteOperands(ctx context.Context, namespace string) {
 
 var _ = Describe("HyperFleetConfig Controller", func() {
 	const (
-		operatorNamespace = "hyperfleet-operator-system"
+		operatorNamespace = "hyperfleet-system"
 		apiImage          = "example.com/hyperfleet-api:test"
 	)
 
@@ -211,5 +211,24 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		By("reconciling a now-absent CR")
 		_, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("returns a wrapped error when the operand namespace is absent", func() {
+		// The reconciler wraps apply failures as "apply component %q: %w". Point it
+		// at a namespace that does not exist so the first apply (the ServiceAccount)
+		// is rejected by the NamespaceLifecycle admission plugin, and assert the
+		// wrapping contract holds. The singleton from BeforeEach is required so
+		// Reconcile reaches the apply step; no operands are created in the bogus
+		// namespace, so no extra cleanup is needed.
+		By("reconciling with an operator namespace that does not exist")
+		badReconciler := &HyperFleetConfigReconciler{
+			Client:            k8sClient,
+			Scheme:            k8sClient.Scheme(),
+			OperatorNamespace: "does-not-exist",
+			APIImage:          apiImage,
+		}
+		_, err := badReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("apply component"))
 	})
 })

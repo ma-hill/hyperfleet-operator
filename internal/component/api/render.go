@@ -108,11 +108,13 @@ metrics:
   port: 9090
 `
 
-// labels returns the common label set stamped on every operand's metadata.
-func labels(cr *hyperfleetv1alpha1.HyperFleetConfig) map[string]string {
+// labels returns the common label set stamped on every operand's metadata. Only
+// the instance name varies per CR; every other value is a package constant, so
+// the helper takes just the name rather than the whole CR.
+func labels(name string) map[string]string {
 	return map[string]string{
 		labelName:      ResourceName,
-		labelInstance:  cr.Name,
+		labelInstance:  name,
 		labelComponent: ComponentName,
 		labelPartOf:    partOfHyperfleet,
 		labelManagedBy: managedByOperator,
@@ -124,10 +126,10 @@ func labels(cr *hyperfleetv1alpha1.HyperFleetConfig) map[string]string {
 // Deployment's selector cannot be changed after creation. Every value here is
 // immutable (ResourceName and ComponentName are constants; the CR name is pinned
 // to the singleton "cluster").
-func selectorLabels(cr *hyperfleetv1alpha1.HyperFleetConfig) map[string]string {
+func selectorLabels(name string) map[string]string {
 	return map[string]string{
 		labelName:      ResourceName,
-		labelInstance:  cr.Name,
+		labelInstance:  name,
 		labelComponent: ComponentName,
 	}
 }
@@ -141,11 +143,11 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ResourceName,
 			Namespace: namespace,
-			Labels:    labels(cr),
+			Labels:    labels(cr.Name),
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To[int32](1),
-			Selector: &metav1.LabelSelector{MatchLabels: selectorLabels(cr)},
+			Selector: &metav1.LabelSelector{MatchLabels: selectorLabels(cr.Name)},
 			Strategy: appsv1.DeploymentStrategy{
 				Type: appsv1.RollingUpdateDeploymentStrategyType,
 				RollingUpdate: &appsv1.RollingUpdateDeployment{
@@ -157,7 +159,7 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 				// Pods carry the full recommended label set; the Deployment selector
 				// (above) is the immutable subset of these, which stays valid because
 				// selectorLabels ⊆ labels.
-				ObjectMeta: metav1.ObjectMeta{Labels: labels(cr)},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels(cr.Name)},
 				Spec: corev1.PodSpec{
 					// The API never calls the Kubernetes API (its Role is empty),
 					// so it needs no service-account token. Opting out of the
@@ -236,7 +238,10 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 							},
 						},
 						{
-							Name:         tmpVolume,
+							Name: tmpVolume,
+							// Writable scratch: the container runs with ReadOnlyRootFilesystem: true
+							// (see the container SecurityContext), so /tmp must be backed by an
+							// ephemeral EmptyDir for any process that writes temporary files.
 							VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 						},
 					},
@@ -254,11 +259,11 @@ func service(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *corev1.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ResourceName,
 			Namespace: namespace,
-			Labels:    labels(cr),
+			Labels:    labels(cr.Name),
 		},
 		Spec: corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
-			Selector: selectorLabels(cr),
+			Selector: selectorLabels(cr.Name),
 			Ports: []corev1.ServicePort{
 				{Name: portNameHTTP, Port: portHTTP, TargetPort: intstr.FromString(portNameHTTP), Protocol: corev1.ProtocolTCP},
 				{Name: portNameHealth, Port: portHealth, TargetPort: intstr.FromString(portNameHealth), Protocol: corev1.ProtocolTCP},
@@ -275,7 +280,7 @@ func serviceAccount(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ResourceName,
 			Namespace: namespace,
-			Labels:    labels(cr),
+			Labels:    labels(cr.Name),
 		},
 	}
 }
@@ -288,7 +293,7 @@ func configMap(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *corev
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ConfigMapName,
 			Namespace: namespace,
-			Labels:    labels(cr),
+			Labels:    labels(cr.Name),
 		},
 		Data: map[string]string{"config.yaml": placeholderConfig},
 	}
@@ -305,7 +310,7 @@ func role(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *rbacv1.Rol
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ResourceName,
 			Namespace: namespace,
-			Labels:    labels(cr),
+			Labels:    labels(cr.Name),
 		},
 		Rules: []rbacv1.PolicyRule{},
 	}
@@ -324,7 +329,7 @@ func roleBinding(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *rba
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      ResourceName,
 			Namespace: namespace,
-			Labels:    labels(cr),
+			Labels:    labels(cr.Name),
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",

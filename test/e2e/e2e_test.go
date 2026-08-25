@@ -31,7 +31,7 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "hyperfleet-operator-system"
+const namespace = "hyperfleet-system"
 
 // serviceAccountName created for the project
 const serviceAccountName = "hyperfleet-operator-controller-manager"

@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -203,21 +204,35 @@ func main() {
 	}
 
 	// operatorNamespace is where all operands are created. It comes from the
-	// downward API (POD_NAMESPACE) in-cluster; the fallback keeps `make run` and
-	// local development working when the env var is absent. The fallback must
+	// downward API (OPERATOR_NAMESPACE) in-cluster; the fallback keeps `make run`
+	// and local development working when the env var is absent. The fallback must
 	// match the deploy namespace in config/default/kustomization.yaml.
-	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	operatorNamespace := os.Getenv("OPERATOR_NAMESPACE")
 	if operatorNamespace == "" {
-		operatorNamespace = "hyperfleet-operator-system"
-		setupLog.Info("POD_NAMESPACE not set; falling back to default operator namespace",
+		operatorNamespace = "hyperfleet-system"
+		setupLog.Info("OPERATOR_NAMESPACE not set; falling back to default operator namespace",
 			"namespace", operatorNamespace)
+	}
+
+	// RELATED_IMAGE_HYPERFLEET_API should be digest-pinned in production; OLM pins
+	// it at bundle-build time via the relatedImages convention. Warn — but do not
+	// fail — when it is unset or uses a mutable tag, so `make run` and tag-based
+	// deploys keep working while the risk is surfaced in the logs.
+	apiImage := os.Getenv("RELATED_IMAGE_HYPERFLEET_API")
+	switch {
+	case apiImage == "":
+		setupLog.Info("RELATED_IMAGE_HYPERFLEET_API not set; falling back to the " +
+			"compiled-in default API image (not recommended for production)")
+	case !strings.Contains(apiImage, "@sha256:"):
+		setupLog.Info("RELATED_IMAGE_HYPERFLEET_API is not digest-pinned; pin the API image by digest for production",
+			"image", apiImage)
 	}
 
 	if err := (&controller.HyperFleetConfigReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		OperatorNamespace: operatorNamespace,
-		APIImage:          os.Getenv("RELATED_IMAGE_HYPERFLEET_API"),
+		APIImage:          apiImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HyperFleetConfig")
 		os.Exit(1)

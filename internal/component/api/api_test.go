@@ -30,7 +30,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
-const testNamespace = "hyperfleet-operator-system"
+const testNamespace = "hyperfleet-system"
 
 // testCR returns the singleton in the shape Render consumes (only Name and
 // spec.bundle matter to rendering in 1407).

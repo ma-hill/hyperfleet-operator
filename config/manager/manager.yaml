@@ -66,9 +66,9 @@ spec:
         image: controller:latest
         name: manager
         env:
-        # POD_NAMESPACE tells the operator which namespace to create operands in
-        # (the operator's own namespace). Sourced from the downward API.
-        - name: POD_NAMESPACE
+        # OPERATOR_NAMESPACE tells the operator which namespace to create operands
+        # in (the operator's own namespace). Sourced from the downward API.
+        - name: OPERATOR_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
@@ -76,7 +76,7 @@ spec:
         # Follows the OLM relatedImages convention so it can be digest-pinned at
         # bundle build time; override per environment as needed.
         - name: RELATED_IMAGE_HYPERFLEET_API
-          value: quay.io/openshift-hyperfleet/hyperfleet-api:latest
+          value: quay.io/openshift-hyperfleet/hyperfleet-api:v0.2.1
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

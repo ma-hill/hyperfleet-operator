@@ -28,7 +28,7 @@ import (
 // DefaultImage is the compiled-in fallback image used when the operator is not
 // given RELATED_IMAGE_HYPERFLEET_API. Production deployments override it with a
 // digest-pinned image via that env var (OLM relatedImages convention).
-const DefaultImage = "quay.io/openshift-hyperfleet/hyperfleet-api:latest"
+const DefaultImage = "quay.io/openshift-hyperfleet/hyperfleet-api:v0.2.1"
 
 // Component renders the HyperFleet API operand. It satisfies the bundle.Component
 // contract structurally (no import of internal/bundle, avoiding an import cycle:

@@ -40,7 +40,7 @@ type HyperFleetConfigReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	// OperatorNamespace is the namespace the operator runs in and where all
-	// operands are created. Sourced from POD_NAMESPACE (downward API) in main.go.
+	// operands are created. Sourced from OPERATOR_NAMESPACE (downward API) in main.go.
 	OperatorNamespace string
 	// APIImage is the container image for the API operand. Sourced from
 	// RELATED_IMAGE_HYPERFLEET_API in main.go; empty falls back to the API
