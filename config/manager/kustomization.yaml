@@ -1,2 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
 resources:
 - manager.yaml
+
+images:
+- name: controller
+  newName: quay.io/openshift-hyperfleet/hyperfleet-operator
+  newTag: placeholder
+
+# Environment variables injected into the manager container
+# These are used for related image references in the operator
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: RELATED_IMAGE_HYPERFLEET_API
+        value: quay.io/openshift-hyperfleet/hyperfleet-api@sha256:c2957324b525fbd7d5ec776f4a395783599e6a878fb3f5993edc06371f1579bd
+  target:
+    kind: Deployment
+    name: controller-manager

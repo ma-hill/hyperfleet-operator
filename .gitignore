@@ -5,6 +5,7 @@
 *.so
 *.dylib
 bin/*
+dist/
 _output/
 Dockerfile.cross
 
