@@ -33,7 +33,7 @@ metadata:
         }
       ]
     capabilities: Full Lifecycle
-    createdAt: "2026-08-27T16:14:13Z"
+    createdAt: "2026-08-27T22:48:48Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.3
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: hyperfleet-operator.v0.0.1
@@ -253,7 +253,6 @@ spec:
   links:
   - name: HyperFleet Operator
     url: https://github.com/openshift-hyperfleet/hyperfleet-operator
-  maturity: alpha
   minKubeVersion: 1.27.0
   provider:
     name: Red Hat

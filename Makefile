@@ -291,13 +291,13 @@ build-installer-override-img: manifests generate ## Generate installer with IMG 
 	@echo "Installer generated with IMG=$(IMG)"
 	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
 
-
+# For now `stable` channel is the default and only channel
 # CHANNELS define the bundle channels used in the bundle.
 # Add a new line here if you would like to change its default config. (E.g CHANNELS = "candidate,fast,stable")
 # To re-generate a bundle for other specific channels without changing the standard setup, you can:
 # - use the CHANNELS as arg of the bundle target (e.g make bundle CHANNELS=candidate,fast,stable)
 # - use environment variables to overwrite this value (e.g export CHANNELS="candidate,fast,stable")
-CHANNELS ?= stable,alpha
+CHANNELS ?= stable
 BUNDLE_CHANNELS := --channels=$(CHANNELS)
 
 # DEFAULT_CHANNEL defines the default channel used in the bundle.
@@ -327,7 +327,7 @@ REG_REPO_BASE ?= $(IMG_REGISTRY)/$(IMG_NAME)
 BUNDLE_IMG ?= $(REG_REPO_BASE)-bundle:v$(VERSION)
 
 # BUNDLE_GEN_FLAGS are the flags passed to the operator-sdk generate bundle command
-BUNDLE_GEN_FLAGS ?= -q --version $(VERSION) $(BUNDLE_METADATA_OPTS)
+BUNDLE_GEN_FLAGS ?= -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
 
 # A comma-separated list of bundle images (e.g. make catalog-build BUNDLE_IMGS=example.com/operator-bundle:v0.1.0,example.com/operator-bundle:v0.2.0).
 # These images MUST exist in a registry and be pull-able.
@@ -340,6 +340,7 @@ CATALOG_IMG ?= $(REG_REPO_BASE)-catalog:v$(VERSION)
 ifneq ($(origin CATALOG_BASE_IMG), undefined)
 FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
 endif
+
 
 .PHONY: bundle
 bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then validate generated files.

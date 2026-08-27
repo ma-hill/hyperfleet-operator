@@ -73,7 +73,6 @@ spec:
   links:
   - name: HyperFleet Operator
     url: https://github.com/openshift-hyperfleet/hyperfleet-operator
-  maturity: alpha
   minKubeVersion: 1.27.0
   provider:
     name: Red Hat
