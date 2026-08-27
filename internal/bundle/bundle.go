@@ -50,13 +50,71 @@ type Config struct {
 	APIImage string
 	// Namespace is the operator's own namespace, where operands are created.
 	Namespace string
+	// ResolvedJWKSURL is the JWKS URL the controller derived via OIDC discovery.
+	// It is threaded through to the API component, which needs it only when auth
+	// is enabled and the CR pins neither a JWKS URL nor a JWKS Secret. Empty
+	// otherwise (the component reads the CR field/Secret path directly).
+	ResolvedJWKSURL string
+}
+
+// cloudCAPIEntities is the entity registration set for the cloud-capi bundle.
+// It is lifted verbatim from the HyperFleet API's shipped
+// configs/config.yaml.example so the operator-rendered config.yaml registers the
+// same resource types the API expects for this deployment flavor. Keep it in
+// sync with the API's example if the entity set changes.
+var cloudCAPIEntities = []api.EntityDescriptor{
+	{
+		Kind:              "Cluster",
+		Plural:            "clusters",
+		SpecSchemaName:    "ClusterSpec",
+		RequiredAdapters:  []string{"validation", "dns", "pullsecret", "hypershift"},
+		NameMinLen:        3,
+		NameMaxLen:        53,
+		RequireSpecSchema: true,
+	},
+	{
+		Kind:              "NodePool",
+		Plural:            "nodepools",
+		ParentKind:        "Cluster",
+		OnParentDelete:    "cascade",
+		SpecSchemaName:    "NodePoolSpec",
+		RequiredAdapters:  []string{"validation", "hypershift"},
+		NameMinLen:        3,
+		NameMaxLen:        15,
+		RequireSpecSchema: true,
+	},
+	{Kind: "Channel", Plural: "channels", SpecSchemaName: "ChannelSpec"},
+	{Kind: "Version", Plural: "versions", ParentKind: "Channel", OnParentDelete: "restrict", SpecSchemaName: "VersionSpec"},
+	{Kind: "WifConfig", Plural: "wifconfigs", SpecSchemaName: "WifConfigSpec"},
+}
+
+// entitiesForBundle returns the entity registration set for a bundle.
+func entitiesForBundle(b hyperfleetv1alpha1.BundleType) []api.EntityDescriptor {
+	switch b {
+	case hyperfleetv1alpha1.BundleCloudCAPI:
+		return cloudCAPIEntities
+	case hyperfleetv1alpha1.BundleOnPremAgent:
+		// Intentionally empty: the on-prem/agent bundle's entity set is not yet
+		// defined. Leaving it nil renders no `entities:` key, and the API then
+		// registers NO entity types at all (LoadDescriptors ranges over the slice;
+		// there is no built-in default set), so it serves zero resource routes — it
+		// does NOT fall back to cloud-capi or any default entities. The on-prem
+		// bundle must supply an explicit entity set here before it is usable.
+		return nil
+	default:
+		return nil
+	}
 }
 
 // sharedTier lists the components present in every bundle regardless of flavor.
-// In phase 1 this is exactly [API], so every bundle resolves to [API].
-func sharedTier(cfg Config) []Component {
+// In phase 1 this is exactly [API], so every bundle resolves to [API]. It takes
+// the bundle so the API component can be given the bundle-specific entity set.
+func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) []Component {
 	return []Component{
-		api.New(cfg.APIImage, cfg.Namespace),
+		api.New(cfg.APIImage, cfg.Namespace, api.Options{
+			Entities:        entitiesForBundle(b),
+			ResolvedJWKSURL: cfg.ResolvedJWKSURL,
+		}),
 	}
 }
 
@@ -71,5 +129,5 @@ func bundleSpecific(_ hyperfleetv1alpha1.BundleType) []Component {
 // any bundle-specific components. The shared tier is first so its components
 // (currently the API) reconcile before anything that might depend on them.
 func Resolve(b hyperfleetv1alpha1.BundleType, cfg Config) []Component {
-	return append(sharedTier(cfg), bundleSpecific(b)...)
+	return append(sharedTier(b, cfg), bundleSpecific(b)...)
 }

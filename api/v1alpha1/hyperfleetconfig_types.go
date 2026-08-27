@@ -145,7 +145,14 @@ type DatabaseSpec struct {
 // Machinery details (JWKS rotation, public-path allowlist) remain
 // operator-internal defaults and are not exposed here.
 //
+// The JWKS source is optional partner intent: a partner may pin an explicit URL
+// (jwkCertURL) or, for air-gapped clusters, supply the key set from a Secret
+// (jwkCertSecretRef). The two are mutually exclusive. When neither is set the
+// operator derives the JWKS URL from the issuer via OIDC discovery — see
+// HYPERFLEET-1408 — keeping the CR minimal (ADR-0019) for the common case.
+//
 // +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.issuer) && has(self.audience))",message="issuer and audience are required when auth is enabled"
+// +kubebuilder:validation:XValidation:rule="!(has(self.jwkCertURL) && has(self.jwkCertSecretRef))",message="jwkCertURL and jwkCertSecretRef are mutually exclusive"
 type AuthSpec struct {
 	// enabled turns JWT authentication on for the API endpoint. It defaults to
 	// true, so a config that omits it gets authentication ON. It is a pointer to
@@ -177,6 +184,27 @@ type AuthSpec struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Audience string `json:"audience,omitempty"`
+
+	// jwkCertURL optionally pins the URL from which the API fetches the JSON Web
+	// Key Set (JWKS) used to verify token signatures, overriding OIDC discovery.
+	// It must be a valid https URL. Mutually exclusive with jwkCertSecretRef; when
+	// neither is set the operator derives the URL from the issuer via OIDC
+	// discovery ({issuer}/.well-known/openid-configuration → jwks_uri).
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
+	// +kubebuilder:validation:XValidation:rule="isURL(self) && url(self).getScheme() == 'https' && url(self).getHostname() != ''",message="jwkCertURL must be a valid https URL"
+	// +optional
+	JWKCertURL string `json:"jwkCertURL,omitempty"`
+
+	// jwkCertSecretRef optionally references a Secret holding the JWKS document,
+	// for air-gapped or private environments where the API cannot reach a JWKS
+	// URL. The Secret must provide the key "jwks.json" containing a JSON Web Key
+	// Set (the format the API parses; see HYPERFLEET-1408). Mutually exclusive
+	// with jwkCertURL.
+	//
+	// +optional
+	JWKCertSecretRef *SecretReference `json:"jwkCertSecretRef,omitempty"`
 }
 
 // TLSSpec configures TLS for the API endpoint. The certificate material is
