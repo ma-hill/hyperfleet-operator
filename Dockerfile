@@ -23,11 +23,13 @@ RUN CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     go build -trimpath -ldflags="-s -w" -o manager ./cmd/main.go
 
 # Runtime stage
-FROM ${BASE_IMAGE} as final
+FROM ${BASE_IMAGE} AS final
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
+
+ARG APP_VERSION="0.0.0-dev"
 
 ENTRYPOINT ["/manager"]
 

@@ -32,8 +32,8 @@ metadata:
           }
         }
       ]
-    capabilities: Full Lifecycle
-    createdAt: "2026-08-27T22:48:48Z"
+    capabilities: Basic Install
+    createdAt: "2026-08-31T18:39:10Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.3
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: hyperfleet-operator.v0.0.1

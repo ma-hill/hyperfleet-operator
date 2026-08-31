@@ -8,6 +8,7 @@ RUN microdnf install -y tar gzip && \
 
 FROM builder-runner AS builder
 # Hack to set the operator container image in the deployment
+
 COPY bundle-hack .
 COPY bundle/manifests /manifests/
 

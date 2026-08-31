@@ -174,11 +174,6 @@ GOFLAGS ?= -trimpath
 #            -X github.com/openshift-hyperfleet/hyperfleet-operator/pkg/version.Commit=$(GIT_SHA) \
 #            -X 'github.com/openshift-hyperfleet/hyperfleet-operator/pkg/version.BuildTime=$(BUILD_DATE)'
 
-# Dev image configuration - set QUAY_USER to push to personal registry
-QUAY_USER ?=
-DEV_TAG ?= dev-$(GIT_SHA)
-BASE_IMAGE ?= registry.access.redhat.com/ubi9/ubi-minimal:latest
-
 .PHONY: check-container-tool
 check-container-tool:
 ifndef CONTAINER_TOOL
@@ -187,7 +182,7 @@ ifndef CONTAINER_TOOL
 endif
 
 .PHONY: image-build
-image-build: check-container-tool manifests generate fmt vet ## Build container image with configurable registry/tag
+image: check-container-tool manifests generate fmt vet ## Build container image with configurable registry/tag
 	@echo "Building container image $(IMG)..."
 	$(CONTAINER_TOOL) build \
 		--platform $(PLATFORM) \
@@ -204,17 +199,28 @@ image-push: check-container-tool ## Push container image to registry
 	@echo "Image pushed: $(IMG)"
 
 .PHONY: image-build-push
-image-build-push: image-build image-push ## Build and push container image to registry
+image-build-push: image image-push ## Build and push container image to registry
 
-.PHONY: image-dev
-image-dev: ## Build and push dev image to dev Quay registry (requires QUAY_USER)
+.PHONY: check-quay-user
+check-quay-user:
 ifeq ($(strip $(QUAY_USER)),)
 	@echo "Error: QUAY_USER is not set"
 	@echo ""
 	@echo "Usage: QUAY_USER=myuser make image-dev"
 	@exit 1
 endif
-	QUAY_REPO=$(QUAY_USER) IMG_TAG=$(DEV_TAG) $(MAKE) image-build-push
+
+# Usage: QUAY_USER=myuser make image-dev
+# Dev image configuration - set QUAY_USER to push to personal registry
+DEV_TAG ?= dev-$(GIT_SHA)
+QUAY_USER ?=
+DEV_BASE_IMAGE ?= registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+.PHONY: image-dev
+image-dev: QUAY_REPO = $(QUAY_USER)
+image-dev: IMG_TAG = $(DEV_TAG)
+image-dev: BASE_IMAGE = $(DEV_BASE_IMAGE)
+image-dev: check-quay-user image-build-push ## Build and push dev image to dev Quay registry (requires QUAY_USER)
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
@@ -260,12 +266,13 @@ uninstall: manifests ## Uninstall CRDs from the K8s cluster specified in ~/.kube
 	@$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
-deploy: manifests ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	@$(KUSTOMIZE) build config/default | $(KUBECTL) apply -f -
+deploy: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	@test -f dist/install.yaml || { echo "Error: dist/install.yaml not found. Run 'make build-deployer or build-deployer-override-img' first."; exit 1; }
+	@$(KUBECTL) apply -f dist/install.yaml
 
 .PHONY: undeploy
 undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	@$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+	@$(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f dist/install.yaml
 
 
 ##@ Bundles/Catalog
@@ -278,17 +285,17 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 # Uninstall resources 
 # kubectl delete -f dist/install.yaml
 # For image overrides edit config/manager/kustomization.yaml
-.PHONY: build-installer
-build-installer: manifests generate ## Generate a consolidated YAML with CRDs and deployment.
+.PHONY: build-deployer
+build-deployer: manifests generate ## Generate a consolidated YAML with CRDs and deployment.
 	@mkdir -p dist
 	@$(KUSTOMIZE) build config/default > dist/install.yaml
 
-.PHONY: build-installer-override-img
-build-installer-override-img: manifests generate ## Generate installer with IMG override, then restore kustomization.yaml
+.PHONY: build-deployer-override-img
+build-deployer-override-img: manifests generate ## Generate deployer with IMG override, then restore kustomization.yaml
 	@mkdir -p dist
 	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
 	@$(KUSTOMIZE) build config/default > dist/install.yaml
-	@echo "Installer generated with IMG=$(IMG)"
+	@echo "Deployer generated with IMG=$(IMG)"
 	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
 
 # For now `stable` channel is the default and only channel
@@ -340,7 +347,6 @@ CATALOG_IMG ?= $(REG_REPO_BASE)-catalog:v$(VERSION)
 ifneq ($(origin CATALOG_BASE_IMG), undefined)
 FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
 endif
-
 
 .PHONY: bundle
 bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
