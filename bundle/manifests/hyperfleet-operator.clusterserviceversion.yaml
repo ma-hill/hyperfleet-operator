@@ -33,7 +33,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-08-31T18:39:10Z"
+    createdAt: "2026-09-01T18:11:57Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.3
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: hyperfleet-operator.v0.0.1
@@ -169,8 +169,8 @@ spec:
                     fieldRef:
                       fieldPath: metadata.namespace
                 - name: RELATED_IMAGE_HYPERFLEET_API
-                  value: quay.io/openshift-hyperfleet/hyperfleet-api@sha256:c2957324b525fbd7d5ec776f4a395783599e6a878fb3f5993edc06371f1579bd
-                image: quay.io/openshift-hyperfleet/hyperfleet-operator:placeholder
+                  value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
+                image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator:latest
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -235,6 +235,14 @@ spec:
           verbs:
           - create
           - patch
+        - apiGroups:
+          - ""
+          resources:
+          - secrets
+          verbs:
+          - get
+          - list
+          - watch
         serviceAccountName: hyperfleet-operator-controller-manager
     strategy: deployment
   installModes:
@@ -258,6 +266,6 @@ spec:
     name: Red Hat
     url: https://github.com/openshift-hyperfleet
   relatedImages:
-  - image: quay.io/openshift-hyperfleet/hyperfleet-api@sha256:c2957324b525fbd7d5ec776f4a395783599e6a878fb3f5993edc06371f1579bd
+  - image: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
     name: hyperfleet-api
   version: 0.0.1

@@ -155,9 +155,11 @@ PLATFORM ?= linux/amd64
 QUAY_REPO ?= openshift-hyperfleet
 IMG_REGISTRY ?= quay.io/$(QUAY_REPO)
 IMG_NAME ?= hyperfleet-operator
-IMG_TAG ?= v0.0.1
+IMG_TAG ?= $(APP_VERSION)
 IMG ?= $(IMG_REGISTRY)/$(IMG_NAME):$(IMG_TAG)
-
+# Base image for production builds - matches Dockerfile default
+# Override with DEV_BASE_IMAGE for dev builds (see image-dev target)
+BASE_IMAGE ?= registry.access.redhat.com/ubi9-micro:latest
 
 APP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -181,7 +183,7 @@ ifndef CONTAINER_TOOL
 	@exit 1
 endif
 
-.PHONY: image-build
+.PHONY: image
 image: check-container-tool manifests generate fmt vet ## Build container image with configurable registry/tag
 	@echo "Building container image $(IMG)..."
 	$(CONTAINER_TOOL) build \
@@ -266,8 +268,7 @@ uninstall: manifests ## Uninstall CRDs from the K8s cluster specified in ~/.kube
 	@$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
-deploy: ## Deploy controller to the K8s cluster specified in ~/.kube/config.
-	@test -f dist/install.yaml || { echo "Error: dist/install.yaml not found. Run 'make build-deployer or build-deployer-override-img' first."; exit 1; }
+deploy: build-deployer-override-img ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	@$(KUBECTL) apply -f dist/install.yaml
 
 .PHONY: undeploy

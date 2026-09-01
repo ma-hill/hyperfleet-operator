@@ -63,7 +63,7 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-        image: controller
+        image: controller:latest
         name: manager
         env:
         # OPERATOR_NAMESPACE tells the operator which namespace to create operands
@@ -72,16 +72,6 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        # RELATED_IMAGE_HYPERFLEET_API is the image used for the API operand.
-        # Follows the OLM relatedImages convention so it can be digest-pinned at
-        # bundle build time; override per environment as needed. Must stay in
-        # sync with api.DefaultImage (0.4.0+: config schema compatibility plus
-        # HYPERFLEET-1603 database *_FILE support, published to the
-        # redhat-services-prod registry via Konflux Release, not
-        # openshift-hyperfleet which stopped receiving pushes after v0.2.1) —
-        # see that constant's comment for why.
-        - name: RELATED_IMAGE_HYPERFLEET_API
-          value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:0.4.0
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

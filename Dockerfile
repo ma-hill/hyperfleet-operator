@@ -2,8 +2,6 @@ ARG BASE_IMAGE=registry.access.redhat.com/ubi9-micro:latest
 
 FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1786351949 AS builder
 
-ARG APP_VERSION="0.0.0-dev"
-
 USER root
 WORKDIR /workspace
 # Copy the Go Modules manifests
