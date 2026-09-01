@@ -204,6 +204,45 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(cm.ResourceVersion).To(Equal(cmRV), "server-side apply of identical state must be a no-op")
 	})
 
+	It("stamps a config-hash on the Deployment and rolls it when a referenced secret rotates", func() {
+		By("creating the referenced database secret")
+		dbSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testDBSecretName, Namespace: operatorNamespace},
+			Data: map[string][]byte{
+				apicomponent.SecretKeyDBHost:     []byte("db.example.com"),
+				apicomponent.SecretKeyDBPort:     []byte("5432"),
+				apicomponent.SecretKeyDBName:     []byte("hyperfleet"),
+				apicomponent.SecretKeyDBUser:     []byte("hyperfleet"),
+				apicomponent.SecretKeyDBPassword: []byte("original"),
+			},
+		}
+		Expect(k8sClient.Create(ctx, dbSecret)).To(Succeed())
+		DeferCleanup(func(ctx context.Context) {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, dbSecret))).To(Succeed())
+		}, ctx)
+
+		By("reconciling and reading the stamped hash")
+		doReconcile()
+		dep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
+		firstHash := dep.Spec.Template.Annotations[configHashAnnotation]
+		Expect(firstHash).NotTo(BeEmpty())
+
+		By("reconciling again with no change: the hash (and pod template) is stable")
+		doReconcile()
+		Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
+		Expect(dep.Spec.Template.Annotations[configHashAnnotation]).To(Equal(firstHash))
+
+		By("rotating the secret value and reconciling: the hash changes")
+		Expect(k8sClient.Get(ctx, operandKey(testDBSecretName), dbSecret)).To(Succeed())
+		dbSecret.Data[apicomponent.SecretKeyDBPassword] = []byte("rotated")
+		Expect(k8sClient.Update(ctx, dbSecret)).To(Succeed())
+
+		doReconcile()
+		Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
+		Expect(dep.Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(firstHash))
+	})
+
 	It("returns without error when the CR is absent (deletion path)", func() {
 		By("deleting the singleton before it is reconciled")
 		deleteSingletonAndWait(ctx)

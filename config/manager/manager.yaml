@@ -74,9 +74,12 @@ spec:
               fieldPath: metadata.namespace
         # RELATED_IMAGE_HYPERFLEET_API is the image used for the API operand.
         # Follows the OLM relatedImages convention so it can be digest-pinned at
-        # bundle build time; override per environment as needed.
+        # bundle build time; override per environment as needed. Must stay in
+        # sync with api.DefaultImage (v0.4.0+: config schema compatibility plus
+        # HYPERFLEET-1603 database *_FILE support) — see that constant's comment
+        # for why.
         - name: RELATED_IMAGE_HYPERFLEET_API
-          value: quay.io/openshift-hyperfleet/hyperfleet-api:v0.2.1
+          value: quay.io/openshift-hyperfleet/hyperfleet-api:v0.4.0
         ports: []
         securityContext:
           allowPrivilegeEscalation: false

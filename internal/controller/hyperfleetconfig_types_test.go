@@ -38,6 +38,14 @@ const (
 	testDBSecretName = "hyperfleet-db"
 	testIssuerURL    = "https://issuer.example.com"
 	testAudience     = "hyperfleet-api"
+	// testJWKSSecretName pins the JWKS source in the shared fixture so the
+	// reconciler specs never perform live OIDC discovery (a network call). The
+	// Secret need not actually exist: Render only checks jwkCertSecretRef is set.
+	testJWKSSecretName = "hyperfleet-jwks"
+	// testInvalidSecretName fails SecretReference.Name's DNS-1123 Pattern marker,
+	// which is inlined independently at every field that embeds a
+	// SecretReference (database, tls, jwkCertSecretRef).
+	testInvalidSecretName = "Invalid_Name"
 )
 
 // These specs exercise the CRD's declarative validation and defaulting through a
@@ -59,9 +67,10 @@ func validHyperFleetConfig() *hyperfleetv1alpha1.HyperFleetConfig {
 					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
 				},
 				Auth: hyperfleetv1alpha1.AuthSpec{
-					Enabled:  ptr.To(true),
-					Issuer:   testIssuerURL,
-					Audience: testAudience,
+					Enabled:          ptr.To(true),
+					Issuer:           testIssuerURL,
+					Audience:         testAudience,
+					JWKCertSecretRef: &hyperfleetv1alpha1.SecretReference{Name: testJWKSSecretName},
 				},
 			},
 		},
@@ -253,6 +262,27 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
 			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
+
+		It("accepts auth with no jwkCertSecretRef (discovery case)", func() {
+			// jwkCertSecretRef is optional: omitting it is valid at the schema level;
+			// the operator derives the URL via OIDC discovery at reconcile time. There
+			// is no CR field to pin a URL directly (see AuthSpec's doc comment).
+			obj := validHyperFleetConfig()
+			obj.Spec.API.Auth.JWKCertSecretRef = nil
+			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+			DeferCleanup(deleteSingletonAndWait, ctx)
+		})
+
+		It("rejects a JWKS secret name that is not a DNS-1123 subdomain", func() {
+			// SecretReference.Name's Pattern marker is inlined independently at every
+			// field (database, tls, and this one); jwkCertSecretRef was the only one
+			// with no dedicated spec. Mirrors the database and tls cases above.
+			obj := validHyperFleetConfig()
+			obj.Spec.API.Auth.JWKCertSecretRef = &hyperfleetv1alpha1.SecretReference{Name: testInvalidSecretName}
+			err := k8sClient.Create(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("jwkCertSecretRef.name"))
+		})
 	})
 
 	Context("required fields", func() {
@@ -269,7 +299,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 
 		It("rejects a database secret name that is not a DNS-1123 subdomain", func() {
 			obj := validHyperFleetConfig()
-			obj.Spec.API.Database.SecretRef.Name = "Invalid_Name"
+			obj.Spec.API.Database.SecretRef.Name = testInvalidSecretName
 			err := k8sClient.Create(ctx, obj)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("database.secretRef.name"))
@@ -313,7 +343,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// database case in the "required fields" context.
 			obj := validHyperFleetConfig()
 			obj.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
-				SecretRef: hyperfleetv1alpha1.SecretReference{Name: "Invalid_Name"},
+				SecretRef: hyperfleetv1alpha1.SecretReference{Name: testInvalidSecretName},
 			}
 			err := k8sClient.Create(ctx, obj)
 			Expect(err).To(HaveOccurred())

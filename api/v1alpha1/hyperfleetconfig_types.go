@@ -145,6 +145,17 @@ type DatabaseSpec struct {
 // Machinery details (JWKS rotation, public-path allowlist) remain
 // operator-internal defaults and are not exposed here.
 //
+// The JWKS source is optional partner intent: for air-gapped or private
+// environments, a partner may supply the key set from a Secret
+// (jwkCertSecretRef). When unset, the operator derives the JWKS URL from the
+// issuer via OIDC discovery — see HYPERFLEET-1408. A pinned-URL override
+// (jwkCertURL) was considered and deliberately left out of v1alpha1: every
+// field here is a long-term compatibility commitment (ADR-0019's CR-minimalism
+// principle), discovery already covers any standards-compliant issuer, and
+// in-app JWT validation is itself defense-in-depth behind the API gateway
+// (ADR-0020) — not a case that obviously needs a third configuration knob.
+// Adding it later is compatible with existing CRs; removing it would not be.
+//
 // +kubebuilder:validation:XValidation:rule="!self.enabled || (has(self.issuer) && has(self.audience))",message="issuer and audience are required when auth is enabled"
 type AuthSpec struct {
 	// enabled turns JWT authentication on for the API endpoint. It defaults to
@@ -177,6 +188,16 @@ type AuthSpec struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Audience string `json:"audience,omitempty"`
+
+	// jwkCertSecretRef optionally references a Secret holding the JWKS document,
+	// for air-gapped or private environments where the API cannot reach a JWKS
+	// URL. The Secret must provide the key "jwks.json" containing a JSON Web Key
+	// Set (the format the API parses; see HYPERFLEET-1408). When unset, the
+	// operator derives the JWKS URL from the issuer via OIDC discovery
+	// ({issuer}/.well-known/openid-configuration → jwks_uri).
+	//
+	// +optional
+	JWKCertSecretRef *SecretReference `json:"jwkCertSecretRef,omitempty"`
 }
 
 // TLSSpec configures TLS for the API endpoint. The certificate material is

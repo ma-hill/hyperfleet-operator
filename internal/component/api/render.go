@@ -33,9 +33,10 @@ limitations under the License.
 //     the Kubernetes API, the pod opts out of the token mount (the chart leaves
 //     the Kubernetes default, which mounts it).
 //
-// Fields that depend on the CR spec (database/auth/tls env, config-file content,
-// profile→resources) are intentionally baseline/placeholder here and are wired
-// in HYPERFLEET-1408.
+// Fields that depend on the CR spec — the config.yaml content, database
+// credential env, and conditional TLS/JWKS Secret mounts — are wired here as of
+// HYPERFLEET-1408. Sizing (replicas and resource requests/limits) remains the
+// fixed 1407 baseline: profile→resources mapping is out of 1408's scope.
 package api
 
 import (
@@ -56,6 +57,11 @@ const (
 	ResourceName = "hyperfleet-api"
 	// ConfigMapName is the metadata.name of the API's configuration ConfigMap.
 	ConfigMapName = "hyperfleet-api-config"
+	// ConfigFileKey is the ConfigMap data key holding the rendered config.yaml. It
+	// is the shared contract between the renderer (configMap) and the controller's
+	// rollout hash (stampConfigHash), so both must reference this constant rather
+	// than the bare string.
+	ConfigFileKey = "config.yaml"
 	// ComponentName is both the component's Name() and its
 	// app.kubernetes.io/component label value.
 	ComponentName = "api"
@@ -91,23 +97,6 @@ const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 )
 
-// placeholderConfig is a structurally valid but not-yet-spec-derived config
-// file. HYPERFLEET-1408 replaces this with content rendered from the CR spec.
-const placeholderConfig = `# HyperFleet API configuration (baseline placeholder).
-# Rendered by the operator for HYPERFLEET-1407: structurally valid but not yet
-# derived from the HyperFleetConfig spec.
-# TODO(HYPERFLEET-1408): populate server/database/auth/tls/logging from the spec.
-server:
-  host: "0.0.0.0"
-  port: 8000
-health:
-  host: "0.0.0.0"
-  port: 8080
-metrics:
-  host: "0.0.0.0"
-  port: 9090
-`
-
 // labels returns the common label set stamped on every operand's metadata. Only
 // the instance name varies per CR; every other value is a package constant, so
 // the helper takes just the name rather than the whole CR.
@@ -134,10 +123,95 @@ func selectorLabels(name string) map[string]string {
 	}
 }
 
-// deployment builds the API Deployment. Image is injected by the operator; the
-// database credentials env, config-file content and profile→resources mapping
-// are deferred to HYPERFLEET-1408.
+// deployment builds the API Deployment. Image is injected by the operator.
+// Database credentials are delivered via a read-only Secret mount plus
+// HYPERFLEET_DATABASE_*_FILE env vars (HYPERFLEET-1603, api.DefaultImage
+// v0.4.0+), and TLS/JWKS Secrets are mounted read-only when the corresponding
+// spec fields are set (HYPERFLEET-1408). Replicas and resources remain the
+// fixed 1407 baseline (profile→resources is out of scope for 1408). The
+// config-hash pod-template annotation is added later by the controller, not
+// here.
 func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string) *appsv1.Deployment {
+	dbSecret := cr.Spec.API.Database.SecretRef.Name
+
+	// Base env: config file location plus the five database credential file
+	// paths. Values are never inlined — each var is a literal path into the
+	// read-only mount below, resolved by the API at startup (ResolveFileOverrides).
+	env := []corev1.EnvVar{
+		{Name: envConfig, Value: configFilePath},
+		{Name: envDBHostFile, Value: dbHostFilePath},
+		{Name: envDBPortFile, Value: dbPortFilePath},
+		{Name: envDBNameFile, Value: dbNameFilePath},
+		{Name: envDBUsernameFile, Value: dbUsernameFilePath},
+		{Name: envDBPasswordFile, Value: dbPasswordFilePath},
+	}
+
+	// Base volumes/mounts: the config ConfigMap and the database Secret
+	// (both read-only) plus writable /tmp. The database mount is unconditional —
+	// spec.api.database.secretRef is required, unlike the TLS/JWKS mounts
+	// appended below only when their optional spec fields are set.
+	volumeMounts := []corev1.VolumeMount{
+		{Name: configVolume, MountPath: configMountPath, ReadOnly: true},
+		{Name: dbVolume, MountPath: dbMountPath, ReadOnly: true},
+		{Name: tmpVolume, MountPath: "/tmp"},
+	}
+	volumes := []corev1.Volume{
+		{
+			Name: configVolume,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: ConfigMapName},
+				},
+			},
+		},
+		{
+			Name: dbVolume,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: dbSecret},
+			},
+		},
+		{
+			Name: tmpVolume,
+			// Writable scratch: the container runs with ReadOnlyRootFilesystem: true
+			// (see the container SecurityContext), so /tmp must be backed by an
+			// ephemeral EmptyDir for any process that writes temporary files.
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+	}
+
+	// TLS: mount the kubernetes.io/tls Secret read-only; its tls.crt/tls.key
+	// surface as files that config.yaml's server.tls.{cert,key}_file point at.
+	if cr.Spec.API.TLS != nil {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name: tlsVolume, MountPath: tlsMountPath, ReadOnly: true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: tlsVolume,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: cr.Spec.API.TLS.SecretRef.Name},
+			},
+		})
+	}
+
+	// JWKS: mount the JWKS Secret read-only only when auth is enabled AND the CR
+	// pins a Secret source (jwkCertSecretRef); the jwks.json key surfaces as the
+	// file config.yaml's jwk_cert_file points at. The URL and OIDC-discovery paths
+	// need no mount. The AuthEnabled guard matches resolveJWKSource (api.go) and
+	// referencedSecretData (rollout.go): with auth off the API never reads the JWKS
+	// file, so mounting it would inject an unused Secret and, if that Secret is
+	// absent, fail pod start despite auth being disabled.
+	if AuthEnabled(cr) && cr.Spec.API.Auth.JWKCertSecretRef != nil {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name: jwksVolume, MountPath: jwksMountPath, ReadOnly: true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: jwksVolume,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: cr.Spec.API.Auth.JWKCertSecretRef.Name},
+			},
+		})
+	}
+
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -184,11 +258,7 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 							{Name: portNameHealth, ContainerPort: portHealth, Protocol: corev1.ProtocolTCP},
 							{Name: portNameMetrics, ContainerPort: portMetrics, Protocol: corev1.ProtocolTCP},
 						},
-						Env: []corev1.EnvVar{
-							{Name: "HYPERFLEET_CONFIG", Value: configFilePath},
-							// TODO(HYPERFLEET-1408): inject database credentials via
-							// secretKeyRef from spec.api.database.secretRef.
-						},
+						Env: env,
 						LivenessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString(portNameHealth)},
@@ -223,28 +293,9 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 						},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: configVolume, MountPath: configMountPath, ReadOnly: true},
-							{Name: tmpVolume, MountPath: "/tmp"},
-						},
+						VolumeMounts: volumeMounts,
 					}},
-					Volumes: []corev1.Volume{
-						{
-							Name: configVolume,
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{Name: ConfigMapName},
-								},
-							},
-						},
-						{
-							Name: tmpVolume,
-							// Writable scratch: the container runs with ReadOnlyRootFilesystem: true
-							// (see the container SecurityContext), so /tmp must be backed by an
-							// ephemeral EmptyDir for any process that writes temporary files.
-							VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
-						},
-					},
+					Volumes: volumes,
 				},
 			},
 		},
@@ -285,9 +336,10 @@ func serviceAccount(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *
 	}
 }
 
-// configMap builds the API's configuration. Content is a baseline placeholder
-// until HYPERFLEET-1408 derives it from the CR spec.
-func configMap(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *corev1.ConfigMap {
+// configMap builds the API's configuration ConfigMap. The config.yaml content is
+// rendered from the CR spec by renderConfig (see config.go) and passed in, so
+// this builder stays a pure object constructor.
+func configMap(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace, configYAML string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
 		ObjectMeta: metav1.ObjectMeta{
@@ -295,7 +347,7 @@ func configMap(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *corev
 			Namespace: namespace,
 			Labels:    labels(cr.Name),
 		},
-		Data: map[string]string{"config.yaml": placeholderConfig},
+		Data: map[string]string{ConfigFileKey: configYAML},
 	}
 }
 

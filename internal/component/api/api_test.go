@@ -25,19 +25,44 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
-const testNamespace = "hyperfleet-system"
+const (
+	testNamespace  = "hyperfleet-system"
+	testDBSecret   = "hyperfleet-db"
+	testTLSSecret  = "hyperfleet-tls"
+	testJWKSSecret = "hyperfleet-jwks"
+	testIssuer     = "https://issuer.example.com"
+	testAudience   = "hyperfleet-api"
+	testJWKCertURL = "https://issuer.example.com/certs"
+)
 
-// testCR returns the singleton in the shape Render consumes (only Name and
-// spec.bundle matter to rendering in 1407).
+// testCR returns a well-formed singleton in the shape Render consumes. Since
+// HYPERFLEET-1408, Render derives config.yaml, database env and JWKS wiring from
+// the spec, so the fixture carries a complete api spec (auth is enabled with
+// jwkCertSecretRef pinned so Render needs no controller-supplied discovery
+// result).
 func testCR() *hyperfleetv1alpha1.HyperFleetConfig {
 	return &hyperfleetv1alpha1.HyperFleetConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
-		Spec:       hyperfleetv1alpha1.HyperFleetConfigSpec{Bundle: hyperfleetv1alpha1.BundleCloudCAPI},
+		Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
+			Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
+			API: hyperfleetv1alpha1.APISpec{
+				Database: hyperfleetv1alpha1.DatabaseSpec{
+					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecret},
+				},
+				Auth: hyperfleetv1alpha1.AuthSpec{
+					Enabled:          ptr.To(true),
+					Issuer:           testIssuer,
+					Audience:         testAudience,
+					JWKCertSecretRef: &hyperfleetv1alpha1.SecretReference{Name: testJWKSSecret},
+				},
+			},
+		},
 	}
 }
 
@@ -55,7 +80,7 @@ func TestRenderProducesTheOperandSet(t *testing.T) {
 	g := NewWithT(t)
 	const image = "example.com/hyperfleet-api:test"
 
-	objs, err := New(image, testNamespace).Render(context.Background(), testCR())
+	objs, err := New(image, testNamespace, Options{}).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(objs).To(HaveLen(6))
 
@@ -82,7 +107,7 @@ func TestRenderDeployment(t *testing.T) {
 	g := NewWithT(t)
 	const image = "example.com/hyperfleet-api:test"
 
-	objs, err := New(image, testNamespace).Render(context.Background(), testCR())
+	objs, err := New(image, testNamespace, Options{}).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
@@ -138,10 +163,161 @@ func TestRenderDeployment(t *testing.T) {
 	g.Expect(mountedConfig).To(BeTrue(), "expected a volume backed by the API ConfigMap")
 }
 
+// deploymentFrom renders the CR and returns the Deployment operand.
+func deploymentFrom(t *testing.T, cr *hyperfleetv1alpha1.HyperFleetConfig) *appsv1.Deployment {
+	t.Helper()
+	g := NewWithT(t)
+	objs, err := New("img", testNamespace, Options{}).Render(context.Background(), cr)
+	g.Expect(err).NotTo(HaveOccurred())
+	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
+	g.Expect(ok).To(BeTrue())
+	return dep
+}
+
+func TestRenderDeploymentDatabaseEnv(t *testing.T) {
+	g := NewWithT(t)
+
+	dep := deploymentFrom(t, testCR())
+
+	// The database Secret is mounted read-only, unconditionally (unlike the
+	// optional TLS/JWKS mounts), so its keys surface as files.
+	g.Expect(volumeSecretName(dep, dbVolume)).To(Equal(testDBSecret))
+	g.Expect(mountReadOnlyAt(dep, dbVolume)).To(Equal(dbMountPath))
+
+	env := map[string]string{}
+	for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+		g.Expect(e.ValueFrom).To(BeNil(), "expected %s as a literal path, not a secretKeyRef", e.Name)
+		env[e.Name] = e.Value
+	}
+
+	// HYPERFLEET_CONFIG and the five database *_FILE vars are all literal paths
+	// into read-only mounts — never a credential value, and never a secretKeyRef
+	// (HYPERFLEET-1603: the API reads these files itself at startup).
+	g.Expect(env).To(HaveKeyWithValue("HYPERFLEET_CONFIG", configFilePath))
+	cases := map[string]string{
+		envDBHostFile:     dbHostFilePath,
+		envDBPortFile:     dbPortFilePath,
+		envDBNameFile:     dbNameFilePath,
+		envDBUsernameFile: dbUsernameFilePath,
+		envDBPasswordFile: dbPasswordFilePath,
+	}
+	for envName, path := range cases {
+		g.Expect(env).To(HaveKeyWithValue(envName, path))
+	}
+}
+
+func TestRenderTLSMountOnlyWhenConfigured(t *testing.T) {
+	g := NewWithT(t)
+
+	// Absent by default.
+	dep := deploymentFrom(t, testCR())
+	g.Expect(volumeNames(dep)).NotTo(ContainElement(tlsVolume))
+
+	// Present when spec.api.tls is set, mounted read-only at the TLS path.
+	cr := testCR()
+	cr.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
+		SecretRef: hyperfleetv1alpha1.SecretReference{Name: testTLSSecret},
+	}
+	dep = deploymentFrom(t, cr)
+	g.Expect(volumeSecretName(dep, tlsVolume)).To(Equal(testTLSSecret))
+	g.Expect(mountReadOnlyAt(dep, tlsVolume)).To(Equal(tlsMountPath))
+}
+
+func TestRenderJWKSMountOnlyWhenSecretRef(t *testing.T) {
+	g := NewWithT(t)
+
+	// Secret-based auth (the fixture default): JWKS Secret mounted read-only.
+	dep := deploymentFrom(t, testCR())
+	g.Expect(volumeSecretName(dep, jwksVolume)).To(Equal(testJWKSSecret))
+	g.Expect(mountReadOnlyAt(dep, jwksVolume)).To(Equal(jwksMountPath))
+
+	// No Secret pinned: falls through to the controller-supplied discovered URL,
+	// so no JWKS mount (config.yaml assertions are in
+	// TestRenderDiscoveredJWKSURLLandsInConfig).
+	cr := testCR()
+	cr.Spec.API.Auth.JWKCertSecretRef = nil
+	objs, err := New("img", testNamespace, Options{ResolvedJWKSURL: "https://issuer.example.com/discovered"}).Render(context.Background(), cr)
+	g.Expect(err).NotTo(HaveOccurred())
+	dep2, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(volumeNames(dep2)).NotTo(ContainElement(jwksVolume))
+}
+
+func TestRenderJWKSMountRequiresAuthEnabled(t *testing.T) {
+	g := NewWithT(t)
+
+	// Auth disabled but a JWKS Secret is pinned (the fixture default). The API
+	// never reads the JWKS file when auth is off, so the Secret must NOT be
+	// mounted — otherwise an unused (and possibly absent, hence
+	// pod-start-blocking) Secret is injected. The mount gate must match
+	// resolveJWKSource/referencedSecretData, which both require auth to be
+	// enabled.
+	cr := testCR()
+	cr.Spec.API.Auth.Enabled = ptr.To(false)
+
+	dep := deploymentFrom(t, cr)
+	g.Expect(volumeNames(dep)).NotTo(ContainElement(jwksVolume))
+}
+
+func TestRenderDiscoveredJWKSURLLandsInConfig(t *testing.T) {
+	g := NewWithT(t)
+
+	// Auth on with no pinned Secret: resolveJWKSource falls through to the
+	// controller-supplied OIDC-discovered URL (Options.ResolvedJWKSURL), which
+	// must be written into config.yaml as jwk_cert_url with no JWKS mount.
+	cr := testCR()
+	cr.Spec.API.Auth.JWKCertSecretRef = nil
+	const discovered = "https://issuer.example.com/discovered/keys"
+
+	objs, err := New("img", testNamespace, Options{ResolvedJWKSURL: discovered}).Render(context.Background(), cr)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(volumeNames(dep)).NotTo(ContainElement(jwksVolume))
+
+	cm, ok := byKind(objs)["ConfigMap"].(*corev1.ConfigMap)
+	g.Expect(ok).To(BeTrue())
+	c0 := parseConfig(t, cm.Data[ConfigFileKey])["server"].(map[string]any)["jwt"].(map[string]any)["configs"].([]any)[0].(map[string]any)
+	g.Expect(c0["jwk_cert_url"]).To(Equal(discovered))
+	g.Expect(c0).NotTo(HaveKey("jwk_cert_file"))
+}
+
+// volumeNames returns the pod's volume names.
+func volumeNames(dep *appsv1.Deployment) []string {
+	names := make([]string, 0, len(dep.Spec.Template.Spec.Volumes))
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		names = append(names, v.Name)
+	}
+	return names
+}
+
+// volumeSecretName returns the SecretName of the named volume (empty if the
+// volume is missing or not Secret-backed).
+func volumeSecretName(dep *appsv1.Deployment, name string) string {
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == name && v.Secret != nil {
+			return v.Secret.SecretName
+		}
+	}
+	return ""
+}
+
+// mountReadOnlyAt returns the mount path of the named volume mount, asserting it
+// is read-only (empty string if not found).
+func mountReadOnlyAt(dep *appsv1.Deployment, name string) string {
+	for _, m := range dep.Spec.Template.Spec.Containers[0].VolumeMounts {
+		if m.Name == name && m.ReadOnly {
+			return m.MountPath
+		}
+	}
+	return ""
+}
+
 func TestRenderEmptyImageFallsBackToDefault(t *testing.T) {
 	g := NewWithT(t)
 
-	objs, err := New("", testNamespace).Render(context.Background(), testCR())
+	objs, err := New("", testNamespace, Options{}).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
@@ -152,7 +328,7 @@ func TestRenderEmptyImageFallsBackToDefault(t *testing.T) {
 func TestRenderRoleHasNoRules(t *testing.T) {
 	g := NewWithT(t)
 
-	objs, err := New("img", testNamespace).Render(context.Background(), testCR())
+	objs, err := New("img", testNamespace, Options{}).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	role, ok := byKind(objs)["Role"].(*rbacv1.Role)
@@ -173,7 +349,7 @@ func TestRenderRoleHasNoRules(t *testing.T) {
 func TestRenderService(t *testing.T) {
 	g := NewWithT(t)
 
-	objs, err := New("img", testNamespace).Render(context.Background(), testCR())
+	objs, err := New("img", testNamespace, Options{}).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 
 	svc, ok := byKind(objs)["Service"].(*corev1.Service)

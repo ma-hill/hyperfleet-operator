@@ -98,6 +98,29 @@ spec:
                         - message: issuer must be a valid https URL
                           rule: isURL(self) && url(self).getScheme() == 'https' &&
                             url(self).getHostname() != ''
+                      jwkCertSecretRef:
+                        description: |-
+                          jwkCertSecretRef optionally references a Secret holding the JWKS document,
+                          for air-gapped or private environments where the API cannot reach a JWKS
+                          URL. The Secret must provide the key "jwks.json" containing a JSON Web Key
+                          Set (the format the API parses; see HYPERFLEET-1408). When unset, the
+                          operator derives the JWKS URL from the issuer via OIDC discovery
+                          ({issuer}/.well-known/openid-configuration → jwks_uri).
+                        properties:
+                          name:
+                            description: |-
+                              name is the name of the Secret in the operator's namespace. It must be a
+                              valid DNS-1123 subdomain, matching what k8s.io/apimachinery/pkg/util/validation
+                              enforces for Secret names (IsDNS1123Subdomain, max length 253), so an
+                              unresolvable reference is rejected at admission rather than failing opaquely
+                              when the reference is later resolved.
+                            maxLength: 253
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                        required:
+                        - name
+                        type: object
                     type: object
                     x-kubernetes-validations:
                     - message: issuer and audience are required when auth is enabled
