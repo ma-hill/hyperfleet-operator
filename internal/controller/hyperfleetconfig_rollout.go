@@ -21,12 +21,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -34,6 +37,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
@@ -43,9 +47,11 @@ import (
 // cannot live in the pure component renderer (HYPERFLEET-1408):
 //
 //   - OIDC discovery of the JWKS URL, and
-//   - the content-hash rollout: reading referenced Secret data and stamping a
-//     hash on the Deployment pod template so config or secret-value changes roll
-//     the pods (the Helm `checksum/config` pattern, extended to Secret data).
+//   - the content-hash rollout: reading each referenced Secret's resourceVersion
+//     and stamping a hash on the Deployment pod template so a config change or a
+//     Secret rotation rolls the pods (the Helm `checksum/config` pattern,
+//     extended to referenced Secrets). The hash covers resourceVersion rather
+//     than Secret data on purpose — see referencedSecretData.
 
 // configHashAnnotation is stamped on the API Deployment's pod template. When it
 // changes, the Deployment controller performs a rolling update, so a config or
@@ -60,20 +66,113 @@ const oidcDiscoveryPath = "/.well-known/openid-configuration"
 // discoveryTimeout bounds a single OIDC discovery HTTP request.
 const discoveryTimeout = 10 * time.Second
 
+// errNoDiscoveryRedirects is returned by newDiscoveryHTTPClient's CheckRedirect
+// to refuse following any redirect.
+var errNoDiscoveryRedirects = errors.New("OIDC discovery does not follow redirects")
+
+// newDiscoveryHTTPClient returns the default client used when no HTTPClient is
+// injected (production; tests always inject one pointed at an httptest
+// server). spec.api.auth.issuer is partner-supplied — anyone able to update the
+// HyperFleetConfig singleton controls discoveryURL — so this client is hardened
+// against using that as a pivot into the controller's network:
+//   - CheckRedirect refuses every redirect, so a discovery endpoint cannot send
+//     the request on to an internal target the partner could not reach directly.
+//   - The dialer's Control hook inspects the resolved address of every
+//     connection (including ones a redirect would otherwise have started) and
+//     refuses loopback, private, link-local (including the 169.254.169.254
+//     cloud metadata address), and multicast destinations.
+func newDiscoveryHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: discoveryTimeout, Control: blockDiscoveryDial}
+	return &http.Client{
+		Timeout:   discoveryTimeout,
+		Transport: &http.Transport{DialContext: dialer.DialContext},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errNoDiscoveryRedirects
+		},
+	}
+}
+
+// blockDiscoveryDial is a net.Dialer.Control hook. It runs after DNS
+// resolution on the actual address about to be dialed, so it also closes off
+// DNS-rebinding: a hostname that resolves differently between an earlier check
+// and the real connection is still caught here, because this is the real
+// connection.
+func blockDiscoveryDial(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("parse dial address %q: %w", address, err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("refusing to dial non-IP discovery address %q", host)
+	}
+	if isDisallowedDiscoveryTarget(ip) {
+		return fmt.Errorf("refusing OIDC discovery dial to disallowed address %s", ip)
+	}
+	return nil
+}
+
+// isDisallowedDiscoveryTarget reports whether ip is a loopback, private,
+// link-local, unspecified, or multicast address — the set of destinations an
+// outbound OIDC discovery request must never reach, since spec.api.auth.issuer
+// is partner-controlled.
+func isDisallowedDiscoveryTarget(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
 // resolveJWKSURL returns the JWKS URL the renderer should write into config.yaml,
-// or "" when none is needed. It performs OIDC discovery only in the case the CR
-// pins no source: auth on, and neither jwkCertURL nor jwkCertSecretRef set. When
-// the CR pins a URL, the renderer uses it directly; when it pins a Secret, the
-// renderer uses the mounted file; when auth is off, no JWKS is needed.
+// or "" when none is needed. It performs OIDC discovery only when the CR pins no
+// Secret: auth on and jwkCertSecretRef unset. When the CR pins a Secret, the
+// renderer uses the mounted file; when auth is off, no JWKS is needed. There is
+// no CR field to pin a URL directly — see AuthSpec's doc comment.
+//
+// A discovery failure with a previously-cached result for the same issuer
+// degrades to that cached jwks_uri instead of failing the reconcile: discovery
+// runs on every reconcile of the singleton CR, including ones triggered solely
+// by an unrelated database or TLS Secret rotation (mapSecretToConfig enqueues
+// on any Secret change in the namespace), so a transient or persistent IdP
+// outage would otherwise block those rotations from rolling the pods. Only the
+// very first discovery for an issuer (nothing cached yet) can still fail the
+// reconcile.
 func (r *HyperFleetConfigReconciler) resolveJWKSURL(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) (string, error) {
 	if !apicomponent.AuthEnabled(cr) {
 		return "", nil
 	}
 	a := cr.Spec.API.Auth
-	if a.JWKCertURL != "" || a.JWKCertSecretRef != nil {
+	if a.JWKCertSecretRef != nil {
 		return "", nil
 	}
-	return r.discoverJWKSURL(ctx, a.Issuer)
+
+	jwksURI, err := r.discoverJWKSURL(ctx, a.Issuer)
+	if err != nil {
+		if cached, ok := r.cachedDiscovery(a.Issuer); ok {
+			logf.FromContext(ctx).Error(err, "OIDC discovery failed; continuing with the last-known jwks_uri",
+				"issuer", a.Issuer, "jwks_uri", cached)
+			return cached, nil
+		}
+		return "", err
+	}
+	r.cacheDiscovery(a.Issuer, jwksURI)
+	return jwksURI, nil
+}
+
+// cachedDiscovery returns the last successfully discovered jwks_uri for issuer.
+func (r *HyperFleetConfigReconciler) cachedDiscovery(issuer string) (string, bool) {
+	r.discoveryCacheMu.Lock()
+	defer r.discoveryCacheMu.Unlock()
+	uri, ok := r.discoveryCache[issuer]
+	return uri, ok
+}
+
+// cacheDiscovery records a successful discovery result for issuer.
+func (r *HyperFleetConfigReconciler) cacheDiscovery(issuer, jwksURI string) {
+	r.discoveryCacheMu.Lock()
+	defer r.discoveryCacheMu.Unlock()
+	if r.discoveryCache == nil {
+		r.discoveryCache = map[string]string{}
+	}
+	r.discoveryCache[issuer] = jwksURI
 }
 
 // discoverJWKSURL fetches {issuer}/.well-known/openid-configuration and returns
@@ -104,7 +203,7 @@ func (r *HyperFleetConfigReconciler) discoverJWKSURL(ctx context.Context, issuer
 
 	httpClient := r.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: discoveryTimeout}
+		httpClient = newDiscoveryHTTPClient()
 	}
 
 	resp, err := httpClient.Do(req)
@@ -154,92 +253,72 @@ func (r *HyperFleetConfigReconciler) discoverJWKSURL(ctx context.Context, issuer
 	return doc.JWKSURI, nil
 }
 
-// hashEntry is one referenced-secret datum contributing to the rollout hash.
-// present distinguishes a missing Secret/key (hashed as an absent discriminator,
-// see computeConfigHash) from one whose value happens to be empty, so a Secret
-// appearing later still changes the hash and rolls the pods.
+// hashEntry is one referenced Secret's contribution to the rollout hash: its
+// resourceVersion, not its data (see referencedSecretData for why). present
+// distinguishes a missing Secret (hashed as an absent discriminator, see
+// computeConfigHash) from an existing one, so a Secret appearing later still
+// changes the hash and rolls the pods.
 type hashEntry struct {
 	id      string
 	present bool
 	value   []byte
 }
 
-// referencedSecretData reads the Secret keys the API actually consumes and
-// returns them as hash entries. It reads only what the current spec references:
-// the database Secret always, the TLS Secret when spec.api.tls is set, and the
-// JWKS Secret when spec.api.auth.jwkCertSecretRef is set. A missing Secret is not
-// an error here (see Reconcile); its keys are recorded as absent.
+// referencedSecretData reads the resourceVersion of each Secret the API
+// actually consumes and returns them as hash entries. It reads only what the
+// current spec references: the database Secret always, the TLS Secret when
+// spec.api.tls is set, and the JWKS Secret when spec.api.auth.jwkCertSecretRef
+// is set. A missing Secret is not an error here (see Reconcile); it is
+// recorded as absent.
+//
+// The hash covers resourceVersion, not Secret data. Hashing the actual
+// credential bytes was the original design, but it turns the pod-template
+// annotation — readable by anyone who can read the Deployment or its Pods, a
+// much wider audience than Secret readers — into an offline oracle for
+// low-entropy credentials (e.g. a weak database password): with the rendered
+// config.yaml and the other connection fields typically knowable, the
+// password becomes the only unknown in an otherwise-known SHA-256 preimage.
+// resourceVersion changes on every write, including a rotation, which is all
+// the rollout needs, and it means the operator never needs to read Secret
+// payloads at all — only their metadata.
 func (r *HyperFleetConfigReconciler) referencedSecretData(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]hashEntry, error) {
-	// secretCache avoids re-reading the same Secret if two roles ever point at it.
-	secretCache := map[string]*corev1.Secret{}
-
-	// getSecret returns (secret, found, err). NotFound is reported as found=false
-	// with no error; any other error is returned.
-	getSecret := func(name string) (*corev1.Secret, bool, error) {
-		if s, ok := secretCache[name]; ok {
-			return s, s != nil, nil
-		}
+	// getEntry returns the named Secret's resourceVersion as a hash entry.
+	// NotFound is reported as present=false with no error; any other error is
+	// returned.
+	getEntry := func(role, secretName string) (hashEntry, error) {
 		s := &corev1.Secret{}
-		key := types.NamespacedName{Name: name, Namespace: r.OperatorNamespace}
+		key := types.NamespacedName{Name: secretName, Namespace: r.OperatorNamespace}
 		if err := r.Get(ctx, key, s); err != nil {
 			if apierrors.IsNotFound(err) {
-				secretCache[name] = nil
-				return nil, false, nil
+				return hashEntry{id: role}, nil
 			}
-			return nil, false, fmt.Errorf("get secret %q: %w", name, err)
+			return hashEntry{}, fmt.Errorf("get secret %q: %w", secretName, err)
 		}
-		secretCache[name] = s
-		return s, true, nil
+		return hashEntry{id: role, present: true, value: []byte(s.ResourceVersion)}, nil
 	}
 
 	var entries []hashEntry
 
-	// appendKeys records one entry per key from the named Secret under a role
-	// prefix (e.g. "database/db.host"), marking each absent if the Secret or key
-	// is missing.
-	appendKeys := func(role, secretName string, keys []string) error {
-		s, found, err := getSecret(secretName)
-		if err != nil {
-			return err
-		}
-		for _, k := range keys {
-			e := hashEntry{id: role + "/" + k}
-			if found {
-				if v, ok := s.Data[k]; ok {
-					e.present = true
-					e.value = v
-				}
-			}
-			entries = append(entries, e)
-		}
-		return nil
-	}
-
-	if err := appendKeys("database", cr.Spec.API.Database.SecretRef.Name, []string{
-		apicomponent.SecretKeyDBHost,
-		apicomponent.SecretKeyDBPort,
-		apicomponent.SecretKeyDBName,
-		apicomponent.SecretKeyDBUser,
-		apicomponent.SecretKeyDBPassword,
-	}); err != nil {
+	dbEntry, err := getEntry("database", cr.Spec.API.Database.SecretRef.Name)
+	if err != nil {
 		return nil, err
 	}
+	entries = append(entries, dbEntry)
 
 	if cr.Spec.API.TLS != nil {
-		if err := appendKeys("tls", cr.Spec.API.TLS.SecretRef.Name, []string{
-			apicomponent.SecretKeyTLSCert,
-			apicomponent.SecretKeyTLSKey,
-		}); err != nil {
+		tlsEntry, err := getEntry("tls", cr.Spec.API.TLS.SecretRef.Name)
+		if err != nil {
 			return nil, err
 		}
+		entries = append(entries, tlsEntry)
 	}
 
 	if apicomponent.AuthEnabled(cr) && cr.Spec.API.Auth.JWKCertSecretRef != nil {
-		if err := appendKeys("jwks", cr.Spec.API.Auth.JWKCertSecretRef.Name, []string{
-			apicomponent.SecretKeyJWKS,
-		}); err != nil {
+		jwksEntry, err := getEntry("jwks", cr.Spec.API.Auth.JWKCertSecretRef.Name)
+		if err != nil {
 			return nil, err
 		}
+		entries = append(entries, jwksEntry)
 	}
 
 	return entries, nil

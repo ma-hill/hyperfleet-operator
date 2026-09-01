@@ -27,11 +27,14 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -179,6 +182,18 @@ func main() {
 		})
 	}
 
+	// operatorNamespace is where all operands are created. It comes from the
+	// downward API (OPERATOR_NAMESPACE) in-cluster; the fallback keeps `make run`
+	// and local development working when the env var is absent. The fallback must
+	// match the deploy namespace in config/default/kustomization.yaml. Computed
+	// before NewManager because it also scopes the Secret cache below.
+	operatorNamespace := os.Getenv("OPERATOR_NAMESPACE")
+	if operatorNamespace == "" {
+		operatorNamespace = "hyperfleet-system"
+		setupLog.Info("OPERATOR_NAMESPACE not set; falling back to default operator namespace",
+			"namespace", operatorNamespace)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -186,6 +201,17 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "85932bfd.redhat.com",
+		// Every referenced Secret (database/TLS/JWKS) lives in the operator's own
+		// namespace (see SecretReference), so the informer never needs to watch or
+		// cache Secrets anywhere else. Without this, the default cache watches
+		// Secrets cluster-wide and every Secret on the cluster ends up in operator
+		// memory, which is also why the ClusterRole needs cluster-wide list/watch
+		// on secrets (see config/rbac/role.yaml and HYPERFLEET-1529).
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},
+			},
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -201,17 +227,6 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
-	}
-
-	// operatorNamespace is where all operands are created. It comes from the
-	// downward API (OPERATOR_NAMESPACE) in-cluster; the fallback keeps `make run`
-	// and local development working when the env var is absent. The fallback must
-	// match the deploy namespace in config/default/kustomization.yaml.
-	operatorNamespace := os.Getenv("OPERATOR_NAMESPACE")
-	if operatorNamespace == "" {
-		operatorNamespace = "hyperfleet-system"
-		setupLog.Info("OPERATOR_NAMESPACE not set; falling back to default operator namespace",
-			"namespace", operatorNamespace)
 	}
 
 	// RELATED_IMAGE_HYPERFLEET_API should be digest-pinned in production; OLM pins

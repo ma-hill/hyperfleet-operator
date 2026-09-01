@@ -43,8 +43,9 @@ const (
 
 // testCR returns a well-formed singleton in the shape Render consumes. Since
 // HYPERFLEET-1408, Render derives config.yaml, database env and JWKS wiring from
-// the spec, so the fixture carries a complete api spec (auth is enabled with an
-// explicit jwkCertURL so Render needs no controller-supplied discovery result).
+// the spec, so the fixture carries a complete api spec (auth is enabled with
+// jwkCertSecretRef pinned so Render needs no controller-supplied discovery
+// result).
 func testCR() *hyperfleetv1alpha1.HyperFleetConfig {
 	return &hyperfleetv1alpha1.HyperFleetConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
@@ -55,10 +56,10 @@ func testCR() *hyperfleetv1alpha1.HyperFleetConfig {
 					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecret},
 				},
 				Auth: hyperfleetv1alpha1.AuthSpec{
-					Enabled:    ptr.To(true),
-					Issuer:     testIssuer,
-					Audience:   testAudience,
-					JWKCertURL: testJWKCertURL,
+					Enabled:          ptr.To(true),
+					Issuer:           testIssuer,
+					Audience:         testAudience,
+					JWKCertSecretRef: &hyperfleetv1alpha1.SecretReference{Name: testJWKSSecret},
 				},
 			},
 		},
@@ -163,7 +164,9 @@ func TestRenderDeployment(t *testing.T) {
 }
 
 // deploymentFrom renders the CR and returns the Deployment operand.
-func deploymentFrom(g *WithT, cr *hyperfleetv1alpha1.HyperFleetConfig) *appsv1.Deployment {
+func deploymentFrom(t *testing.T, cr *hyperfleetv1alpha1.HyperFleetConfig) *appsv1.Deployment {
+	t.Helper()
+	g := NewWithT(t)
 	objs, err := New("img", testNamespace, Options{}).Render(context.Background(), cr)
 	g.Expect(err).NotTo(HaveOccurred())
 	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
@@ -174,7 +177,7 @@ func deploymentFrom(g *WithT, cr *hyperfleetv1alpha1.HyperFleetConfig) *appsv1.D
 func TestRenderDeploymentDatabaseEnv(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentFrom(g, testCR())
+	dep := deploymentFrom(t, testCR())
 	env := map[string]*corev1.EnvVarSource{}
 	for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
 		env[e.Name] = e.ValueFrom
@@ -207,7 +210,7 @@ func TestRenderTLSMountOnlyWhenConfigured(t *testing.T) {
 	g := NewWithT(t)
 
 	// Absent by default.
-	dep := deploymentFrom(g, testCR())
+	dep := deploymentFrom(t, testCR())
 	g.Expect(volumeNames(dep)).NotTo(ContainElement(tlsVolume))
 
 	// Present when spec.api.tls is set, mounted read-only at the TLS path.
@@ -215,7 +218,7 @@ func TestRenderTLSMountOnlyWhenConfigured(t *testing.T) {
 	cr.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
 		SecretRef: hyperfleetv1alpha1.SecretReference{Name: testTLSSecret},
 	}
-	dep = deploymentFrom(g, cr)
+	dep = deploymentFrom(t, cr)
 	g.Expect(volumeSecretName(dep, tlsVolume)).To(Equal(testTLSSecret))
 	g.Expect(mountReadOnlyAt(dep, tlsVolume)).To(Equal(tlsMountPath))
 }
@@ -223,44 +226,46 @@ func TestRenderTLSMountOnlyWhenConfigured(t *testing.T) {
 func TestRenderJWKSMountOnlyWhenSecretRef(t *testing.T) {
 	g := NewWithT(t)
 
-	// URL-based auth (the fixture): no JWKS mount.
-	dep := deploymentFrom(g, testCR())
-	g.Expect(volumeNames(dep)).NotTo(ContainElement(jwksVolume))
-
-	// Secret-based auth: JWKS Secret mounted read-only.
-	cr := testCR()
-	cr.Spec.API.Auth.JWKCertURL = ""
-	cr.Spec.API.Auth.JWKCertSecretRef = &hyperfleetv1alpha1.SecretReference{Name: testJWKSSecret}
-	dep = deploymentFrom(g, cr)
+	// Secret-based auth (the fixture default): JWKS Secret mounted read-only.
+	dep := deploymentFrom(t, testCR())
 	g.Expect(volumeSecretName(dep, jwksVolume)).To(Equal(testJWKSSecret))
 	g.Expect(mountReadOnlyAt(dep, jwksVolume)).To(Equal(jwksMountPath))
+
+	// No Secret pinned: falls through to the controller-supplied discovered URL,
+	// so no JWKS mount (config.yaml assertions are in
+	// TestRenderDiscoveredJWKSURLLandsInConfig).
+	cr := testCR()
+	cr.Spec.API.Auth.JWKCertSecretRef = nil
+	objs, err := New("img", testNamespace, Options{ResolvedJWKSURL: "https://issuer.example.com/discovered"}).Render(context.Background(), cr)
+	g.Expect(err).NotTo(HaveOccurred())
+	dep2, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(volumeNames(dep2)).NotTo(ContainElement(jwksVolume))
 }
 
 func TestRenderJWKSMountRequiresAuthEnabled(t *testing.T) {
 	g := NewWithT(t)
 
-	// Auth disabled but a JWKS Secret is pinned. The API never reads the JWKS file
-	// when auth is off, so the Secret must NOT be mounted — otherwise an unused
-	// (and possibly absent, hence pod-start-blocking) Secret is injected. The mount
-	// gate must match resolveJWKSource/referencedSecretData, which both require
-	// auth to be enabled.
+	// Auth disabled but a JWKS Secret is pinned (the fixture default). The API
+	// never reads the JWKS file when auth is off, so the Secret must NOT be
+	// mounted — otherwise an unused (and possibly absent, hence
+	// pod-start-blocking) Secret is injected. The mount gate must match
+	// resolveJWKSource/referencedSecretData, which both require auth to be
+	// enabled.
 	cr := testCR()
 	cr.Spec.API.Auth.Enabled = ptr.To(false)
-	cr.Spec.API.Auth.JWKCertURL = ""
-	cr.Spec.API.Auth.JWKCertSecretRef = &hyperfleetv1alpha1.SecretReference{Name: testJWKSSecret}
 
-	dep := deploymentFrom(g, cr)
+	dep := deploymentFrom(t, cr)
 	g.Expect(volumeNames(dep)).NotTo(ContainElement(jwksVolume))
 }
 
 func TestRenderDiscoveredJWKSURLLandsInConfig(t *testing.T) {
 	g := NewWithT(t)
 
-	// Auth on with neither a pinned URL nor a pinned Secret: resolveJWKSource falls
-	// through to the controller-supplied OIDC-discovered URL (Options.ResolvedJWKSURL),
-	// which must be written into config.yaml as jwk_cert_url with no JWKS mount.
+	// Auth on with no pinned Secret: resolveJWKSource falls through to the
+	// controller-supplied OIDC-discovered URL (Options.ResolvedJWKSURL), which
+	// must be written into config.yaml as jwk_cert_url with no JWKS mount.
 	cr := testCR()
-	cr.Spec.API.Auth.JWKCertURL = ""
 	cr.Spec.API.Auth.JWKCertSecretRef = nil
 	const discovered = "https://issuer.example.com/discovered/keys"
 
@@ -273,7 +278,7 @@ func TestRenderDiscoveredJWKSURLLandsInConfig(t *testing.T) {
 
 	cm, ok := byKind(objs)["ConfigMap"].(*corev1.ConfigMap)
 	g.Expect(ok).To(BeTrue())
-	c0 := parseConfig(g, cm.Data[ConfigFileKey])["server"].(map[string]any)["jwt"].(map[string]any)["configs"].([]any)[0].(map[string]any)
+	c0 := parseConfig(t, cm.Data[ConfigFileKey])["server"].(map[string]any)["jwt"].(map[string]any)["configs"].([]any)[0].(map[string]any)
 	g.Expect(c0["jwk_cert_url"]).To(Equal(discovered))
 	g.Expect(c0).NotTo(HaveKey("jwk_cert_file"))
 }

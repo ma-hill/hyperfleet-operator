@@ -28,7 +28,8 @@ import (
 func TestEntitiesForBundleCloudCAPI(t *testing.T) {
 	g := NewWithT(t)
 
-	ents := entitiesForBundle(hyperfleetv1alpha1.BundleCloudCAPI)
+	ents, err := entitiesForBundle(hyperfleetv1alpha1.BundleCloudCAPI)
+	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(ents).To(Equal(cloudCAPIEntities))
 	g.Expect(ents).NotTo(BeEmpty())
 
@@ -42,32 +43,37 @@ func TestEntitiesForBundleCloudCAPI(t *testing.T) {
 	g.Expect(kinds).To(HaveKey("NodePool"))
 }
 
-func TestEntitiesForBundleOnPremAgentIsEmpty(t *testing.T) {
+func TestEntitiesForBundleOnPremAgentErrors(t *testing.T) {
 	g := NewWithT(t)
 
-	// The on-prem/agent bundle has no entity set yet: it must be nil (renders no
-	// entities: key, so the API registers zero entity types), NOT the cloud-capi
-	// set. This pins the contract the corrected comment describes.
-	g.Expect(entitiesForBundle(hyperfleetv1alpha1.BundleOnPremAgent)).To(BeNil())
+	// The on-prem/agent bundle has no entity set yet: resolving it must fail
+	// loudly rather than silently produce an entities-free (so routes-free) API
+	// that still reports healthy.
+	ents, err := entitiesForBundle(hyperfleetv1alpha1.BundleOnPremAgent)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(ents).To(BeNil())
 }
 
-func TestEntitiesForBundleUnknownIsEmpty(t *testing.T) {
+func TestEntitiesForBundleUnknownErrors(t *testing.T) {
 	g := NewWithT(t)
 
-	// An unrecognized bundle falls through the switch default and registers no
-	// entities rather than silently defaulting to cloud-capi.
-	g.Expect(entitiesForBundle(hyperfleetv1alpha1.BundleType("does-not-exist"))).To(BeNil())
+	// An unrecognized bundle falls through the switch default and errors rather
+	// than silently defaulting to cloud-capi or an empty set.
+	ents, err := entitiesForBundle(hyperfleetv1alpha1.BundleType("does-not-exist"))
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(ents).To(BeNil())
 }
 
 func TestResolveWiresSharedTierAPIComponent(t *testing.T) {
 	g := NewWithT(t)
 
 	const jwks = "https://issuer.example.com/keys"
-	comps := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
 		APIImage:        "example.com/api:test",
 		Namespace:       "hyperfleet-system",
 		ResolvedJWKSURL: jwks,
 	})
+	g.Expect(err).NotTo(HaveOccurred())
 
 	// Phase 1: every bundle resolves to exactly [API].
 	g.Expect(comps).To(HaveLen(1))
@@ -80,13 +86,12 @@ func TestResolveWiresSharedTierAPIComponent(t *testing.T) {
 	g.Expect(comp.Entities).To(Equal(cloudCAPIEntities))
 }
 
-func TestResolveOnPremAgentHasNoEntities(t *testing.T) {
+func TestResolveOnPremAgentErrors(t *testing.T) {
 	g := NewWithT(t)
 
-	comps := Resolve(hyperfleetv1alpha1.BundleOnPremAgent, Config{Namespace: "ns"})
-	g.Expect(comps).To(HaveLen(1))
-
-	comp, ok := comps[0].(*api.Component)
-	g.Expect(ok).To(BeTrue())
-	g.Expect(comp.Entities).To(BeEmpty())
+	// Resolving the on-prem/agent bundle must fail until it has a real entity
+	// set, not silently return an API component with no entities.
+	comps, err := Resolve(hyperfleetv1alpha1.BundleOnPremAgent, Config{Namespace: "ns"})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(comps).To(BeNil())
 }

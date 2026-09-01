@@ -124,24 +124,20 @@ func AuthEnabled(cr *hyperfleetv1alpha1.HyperFleetConfig) bool {
 	return e == nil || *e
 }
 
-// resolveJWKSource picks the single JWKS source for the config file, by the
-// precedence the CRD enforces as mutually exclusive: an explicit CR URL, else a
-// mounted CR Secret (a file path), else the controller-supplied OIDC-discovered
-// URL. It returns (url, file) with at most one non-empty, and ("", "") when auth
-// is disabled. When auth is on and none resolves, both are empty and renderConfig
+// resolveJWKSource picks the single JWKS source for the config file: a mounted
+// CR Secret (a file path) when jwkCertSecretRef is set, else the
+// controller-supplied OIDC-discovered URL. It returns (url, file) with at most
+// one non-empty, and ("", "") when auth is disabled. When auth is on and
+// neither resolves (discovery not yet run), both are empty and renderConfig
 // reports the wiring error.
 func (c *Component) resolveJWKSource(cr *hyperfleetv1alpha1.HyperFleetConfig) (url, file string) {
 	if !AuthEnabled(cr) {
 		return "", ""
 	}
-	switch {
-	case cr.Spec.API.Auth.JWKCertURL != "":
-		return cr.Spec.API.Auth.JWKCertURL, ""
-	case cr.Spec.API.Auth.JWKCertSecretRef != nil:
+	if cr.Spec.API.Auth.JWKCertSecretRef != nil {
 		return "", jwksFilePath
-	default:
-		return c.ResolvedJWKSURL, ""
 	}
+	return c.ResolvedJWKSURL, ""
 }
 
 // Conditions reports the component's health as metav1.Conditions. The contract is

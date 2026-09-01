@@ -140,9 +140,9 @@ type configInput struct {
 	Issuer   string
 	Audience string
 	// JWKCertURL / JWKCertFile are mutually exclusive; exactly one is non-empty
-	// when auth is enabled. JWKCertURL is either the partner-pinned URL or the
-	// OIDC-discovered jwks_uri; JWKCertFile is the in-pod path of a mounted JWKS
-	// Secret.
+	// when auth is enabled. JWKCertURL is always the OIDC-discovered jwks_uri
+	// (there is no partner-pinned URL); JWKCertFile is the in-pod path of a
+	// mounted JWKS Secret.
 	JWKCertURL  string
 	JWKCertFile string
 	// TLSEnabled emits the server.tls block pointing at the mounted cert/key.

@@ -103,8 +103,9 @@ spec:
                           jwkCertSecretRef optionally references a Secret holding the JWKS document,
                           for air-gapped or private environments where the API cannot reach a JWKS
                           URL. The Secret must provide the key "jwks.json" containing a JSON Web Key
-                          Set (the format the API parses; see HYPERFLEET-1408). Mutually exclusive
-                          with jwkCertURL.
+                          Set (the format the API parses; see HYPERFLEET-1408). When unset, the
+                          operator derives the JWKS URL from the issuer via OIDC discovery
+                          ({issuer}/.well-known/openid-configuration → jwks_uri).
                         properties:
                           name:
                             description: |-
@@ -120,26 +121,10 @@ spec:
                         required:
                         - name
                         type: object
-                      jwkCertURL:
-                        description: |-
-                          jwkCertURL optionally pins the URL from which the API fetches the JSON Web
-                          Key Set (JWKS) used to verify token signatures, overriding OIDC discovery.
-                          It must be a valid https URL. Mutually exclusive with jwkCertSecretRef; when
-                          neither is set the operator derives the URL from the issuer via OIDC
-                          discovery ({issuer}/.well-known/openid-configuration → jwks_uri).
-                        maxLength: 2048
-                        minLength: 1
-                        type: string
-                        x-kubernetes-validations:
-                        - message: jwkCertURL must be a valid https URL
-                          rule: isURL(self) && url(self).getScheme() == 'https' &&
-                            url(self).getHostname() != ''
                     type: object
                     x-kubernetes-validations:
                     - message: issuer and audience are required when auth is enabled
                       rule: '!self.enabled || (has(self.issuer) && has(self.audience))'
-                    - message: jwkCertURL and jwkCertSecretRef are mutually exclusive
-                      rule: '!(has(self.jwkCertURL) && has(self.jwkCertSecretRef))'
                   database:
                     description: database configures the external PostgreSQL connection.
                     properties:

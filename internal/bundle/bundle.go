@@ -22,6 +22,7 @@ package bundle
 
 import (
 	"context"
+	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -88,34 +89,42 @@ var cloudCAPIEntities = []api.EntityDescriptor{
 	{Kind: "WifConfig", Plural: "wifconfigs", SpecSchemaName: "WifConfigSpec"},
 }
 
-// entitiesForBundle returns the entity registration set for a bundle.
-func entitiesForBundle(b hyperfleetv1alpha1.BundleType) []api.EntityDescriptor {
+// entitiesForBundle returns the entity registration set for a bundle, or an
+// error if the bundle has none defined yet. An empty entity set is not a safe
+// default to fall back to silently: the API then registers NO entity types at
+// all (LoadDescriptors ranges over the slice; there is no built-in default
+// set), so it would serve zero resource routes while still reporting as
+// healthy — a partner who picks that bundle gets a running-looking API with no
+// visible signal that it does nothing. Failing resolution instead surfaces the
+// gap immediately.
+func entitiesForBundle(b hyperfleetv1alpha1.BundleType) ([]api.EntityDescriptor, error) {
 	switch b {
 	case hyperfleetv1alpha1.BundleCloudCAPI:
-		return cloudCAPIEntities
+		return cloudCAPIEntities, nil
 	case hyperfleetv1alpha1.BundleOnPremAgent:
-		// Intentionally empty: the on-prem/agent bundle's entity set is not yet
-		// defined. Leaving it nil renders no `entities:` key, and the API then
-		// registers NO entity types at all (LoadDescriptors ranges over the slice;
-		// there is no built-in default set), so it serves zero resource routes — it
-		// does NOT fall back to cloud-capi or any default entities. The on-prem
-		// bundle must supply an explicit entity set here before it is usable.
-		return nil
+		// The on-prem/agent bundle's entity set is not yet defined. Until it is,
+		// resolving this bundle must fail rather than silently produce an API that
+		// serves no routes.
+		return nil, fmt.Errorf("bundle %q has no entity set defined yet; it cannot be resolved", b)
 	default:
-		return nil
+		return nil, fmt.Errorf("unknown bundle %q", b)
 	}
 }
 
 // sharedTier lists the components present in every bundle regardless of flavor.
 // In phase 1 this is exactly [API], so every bundle resolves to [API]. It takes
 // the bundle so the API component can be given the bundle-specific entity set.
-func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) []Component {
+func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error) {
+	entities, err := entitiesForBundle(b)
+	if err != nil {
+		return nil, err
+	}
 	return []Component{
 		api.New(cfg.APIImage, cfg.Namespace, api.Options{
-			Entities:        entitiesForBundle(b),
+			Entities:        entities,
 			ResolvedJWKSURL: cfg.ResolvedJWKSURL,
 		}),
-	}
+	}, nil
 }
 
 // bundleSpecific returns the components unique to a bundle beyond the shared
@@ -125,9 +134,15 @@ func bundleSpecific(_ hyperfleetv1alpha1.BundleType) []Component {
 	return nil
 }
 
-// Resolve maps a bundle to its ordered component set: the shared tier followed by
-// any bundle-specific components. The shared tier is first so its components
-// (currently the API) reconcile before anything that might depend on them.
-func Resolve(b hyperfleetv1alpha1.BundleType, cfg Config) []Component {
-	return append(sharedTier(b, cfg), bundleSpecific(b)...)
+// Resolve maps a bundle to its ordered component set: the shared tier followed
+// by any bundle-specific components. The shared tier is first so its
+// components (currently the API) reconcile before anything that might depend
+// on them. It errors for a bundle with no usable component set (see
+// entitiesForBundle) rather than resolving to a silently-broken deployment.
+func Resolve(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error) {
+	shared, err := sharedTier(b, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundle %q: %w", b, err)
+	}
+	return append(shared, bundleSpecific(b)...), nil
 }

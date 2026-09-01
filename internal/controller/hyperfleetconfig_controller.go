@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -52,10 +53,19 @@ type HyperFleetConfigReconciler struct {
 	// RELATED_IMAGE_HYPERFLEET_API in main.go; empty falls back to the API
 	// component's compiled-in default.
 	APIImage string
-	// HTTPClient performs OIDC discovery requests. Nil falls back to a client
-	// with a sane timeout (see discoverJWKSURL); tests inject one pointed at an
+	// HTTPClient performs OIDC discovery requests. Nil falls back to a hardened
+	// default client (see discoverJWKSURL); tests inject one pointed at an
 	// httptest server.
 	HTTPClient *http.Client
+
+	// discoveryCacheMu guards discoveryCache.
+	discoveryCacheMu sync.Mutex
+	// discoveryCache holds the last successfully discovered jwks_uri per issuer,
+	// so a transient IdP outage degrades to "keep using the last-known key
+	// endpoint" rather than blocking every reconcile — including ones triggered
+	// by an unrelated Secret rotation — on that issuer being reachable. See
+	// resolveJWKSURL.
+	discoveryCache map[string]string
 }
 
 // +kubebuilder:rbac:groups=hyperfleet.redhat.com,resources=hyperfleetconfigs,verbs=get;list;watch;create;update;patch;delete
@@ -71,8 +81,12 @@ type HyperFleetConfigReconciler struct {
 // Secrets are referenced (not owned): the operator reads partner-provided
 // database/TLS/JWKS Secrets to compute the config-rollout hash and watches them
 // so a rotation re-triggers reconcile. get;list;watch only — the operator never
-// writes them.
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// writes them. Namespaced (not a ClusterRole rule): every referenced Secret
+// lives in the operator's own namespace (see SecretReference), matching the
+// cache scoping in cmd/main.go. The namespace literal here must match that
+// default and config/default/kustomization.yaml's namespace transformer, which
+// also rewrites this Role's own metadata.namespace at build time.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch,namespace=hyperfleet-system
 
 // Reconcile drives the cluster toward the desired state for the HyperFleetConfig
 // singleton. It is level-based and idempotent: it renders each component's
@@ -100,9 +114,9 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("resolve JWKS URL: %w", err)
 	}
 
-	// Read the referenced Secret data used for the rollout hash. A change to a
-	// Secret's *values* (rotation) does not change the rendered config.yaml or the
-	// pod spec, so without hashing the pods would keep running with stale
+	// Read each referenced Secret's resourceVersion for the rollout hash. A
+	// rotation bumps resourceVersion without changing the rendered config.yaml or
+	// the pod spec, so without hashing it the pods would keep running with stale
 	// credentials/certs. Missing Secrets are not fatal here (validation and the
 	// Degraded condition are HYPERFLEET-1512); they are hashed as absent so the
 	// pods roll once the Secret appears.
@@ -111,11 +125,14 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("read referenced secrets: %w", err)
 	}
 
-	components := bundle.Resolve(cr.Spec.Bundle, bundle.Config{
+	components, err := bundle.Resolve(cr.Spec.Bundle, bundle.Config{
 		APIImage:        r.APIImage,
 		Namespace:       r.OperatorNamespace,
 		ResolvedJWKSURL: jwksURL,
 	})
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolve components: %w", err)
+	}
 
 	for _, component := range components {
 		objs, err := component.Render(ctx, cr)

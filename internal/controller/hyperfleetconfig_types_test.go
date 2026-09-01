@@ -38,10 +38,10 @@ const (
 	testDBSecretName = "hyperfleet-db"
 	testIssuerURL    = "https://issuer.example.com"
 	testAudience     = "hyperfleet-api"
-	// testJWKCertURL pins the JWKS source in the shared fixture so the reconciler
-	// specs never perform live OIDC discovery (a network call). It also stands in
-	// for the "URL" arm of the mutually-exclusive JWKS source.
-	testJWKCertURL = "https://issuer.example.com/protocol/openid-connect/certs"
+	// testJWKSSecretName pins the JWKS source in the shared fixture so the
+	// reconciler specs never perform live OIDC discovery (a network call). The
+	// Secret need not actually exist: Render only checks jwkCertSecretRef is set.
+	testJWKSSecretName = "hyperfleet-jwks"
 )
 
 // These specs exercise the CRD's declarative validation and defaulting through a
@@ -63,10 +63,10 @@ func validHyperFleetConfig() *hyperfleetv1alpha1.HyperFleetConfig {
 					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
 				},
 				Auth: hyperfleetv1alpha1.AuthSpec{
-					Enabled:    ptr.To(true),
-					Issuer:     testIssuerURL,
-					Audience:   testAudience,
-					JWKCertURL: testJWKCertURL,
+					Enabled:          ptr.To(true),
+					Issuer:           testIssuerURL,
+					Audience:         testAudience,
+					JWKCertSecretRef: &hyperfleetv1alpha1.SecretReference{Name: testJWKSSecretName},
 				},
 			},
 		},
@@ -259,41 +259,12 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
 
-		It("rejects a non-https jwkCertURL", func() {
-			// The shared fixture pins a valid https jwkCertURL; downgrade it to http
-			// to isolate the https XValidation on the field.
+		It("accepts auth with no jwkCertSecretRef (discovery case)", func() {
+			// jwkCertSecretRef is optional: omitting it is valid at the schema level;
+			// the operator derives the URL via OIDC discovery at reconcile time. There
+			// is no CR field to pin a URL directly (see AuthSpec's doc comment).
 			obj := validHyperFleetConfig()
-			obj.Spec.API.Auth.JWKCertURL = "http://issuer.example.com/certs"
-			err := k8sClient.Create(ctx, obj)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("jwkCertURL must be a valid https URL"))
-		})
-
-		It("accepts a JWKS Secret reference in place of a URL", func() {
-			// The Secret arm of the mutually-exclusive JWKS source: clear the URL the
-			// fixture sets and supply a Secret ref instead.
-			obj := validHyperFleetConfig()
-			obj.Spec.API.Auth.JWKCertURL = ""
-			obj.Spec.API.Auth.JWKCertSecretRef = &hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-jwks"}
-			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
-			DeferCleanup(deleteSingletonAndWait, ctx)
-		})
-
-		It("rejects setting both jwkCertURL and jwkCertSecretRef", func() {
-			// The fixture already sets jwkCertURL; adding a Secret ref must trip the
-			// type-level mutual-exclusion rule.
-			obj := validHyperFleetConfig()
-			obj.Spec.API.Auth.JWKCertSecretRef = &hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-jwks"}
-			err := k8sClient.Create(ctx, obj)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("jwkCertURL and jwkCertSecretRef are mutually exclusive"))
-		})
-
-		It("accepts auth with neither jwkCertURL nor jwkCertSecretRef (discovery case)", func() {
-			// Both JWKS fields optional: omitting them is valid at the schema level;
-			// the operator derives the URL via OIDC discovery at reconcile time.
-			obj := validHyperFleetConfig()
-			obj.Spec.API.Auth.JWKCertURL = ""
+			obj.Spec.API.Auth.JWKCertSecretRef = nil
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
 			DeferCleanup(deleteSingletonAndWait, ctx)
 		})

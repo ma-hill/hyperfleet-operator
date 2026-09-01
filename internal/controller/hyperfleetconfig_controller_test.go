@@ -218,7 +218,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		}
 		Expect(k8sClient.Create(ctx, dbSecret)).To(Succeed())
 		DeferCleanup(func(ctx context.Context) {
-			_ = k8sClient.Delete(ctx, dbSecret)
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, dbSecret))).To(Succeed())
 		}, ctx)
 
 		By("reconciling and reading the stamped hash")

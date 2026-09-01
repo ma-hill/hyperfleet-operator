@@ -26,7 +26,9 @@ import (
 // parseConfig round-trips a rendered document back into a generic map so tests
 // assert on the actual serialized keys (the contract the API consumes), not on
 // the Go structs.
-func parseConfig(g *WithT, out string) map[string]any {
+func parseConfig(t *testing.T, out string) map[string]any {
+	t.Helper()
+	g := NewWithT(t)
 	var m map[string]any
 	g.Expect(yaml.Unmarshal([]byte(out), &m)).To(Succeed())
 	return m
@@ -68,7 +70,7 @@ func TestRenderConfigURLAndTLS(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	cfg := parseConfig(g, out)
+	cfg := parseConfig(t, out)
 
 	// Database is never written to the config file — credentials come from env.
 	g.Expect(cfg).NotTo(HaveKey("database"))
@@ -117,7 +119,7 @@ func TestRenderConfigJWKSFile(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	c0 := parseConfig(g, out)["server"].(map[string]any)["jwt"].(map[string]any)["configs"].([]any)[0].(map[string]any)
+	c0 := parseConfig(t, out)["server"].(map[string]any)["jwt"].(map[string]any)["configs"].([]any)[0].(map[string]any)
 	g.Expect(c0["jwk_cert_file"]).To(Equal(jwksFilePath))
 	g.Expect(c0).NotTo(HaveKey("jwk_cert_url"))
 }
@@ -128,7 +130,7 @@ func TestRenderConfigAuthDisabled(t *testing.T) {
 	out, err := renderConfig(configInput{AuthEnabled: false})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	cfg := parseConfig(g, out)
+	cfg := parseConfig(t, out)
 	server := cfg["server"].(map[string]any)
 	jwt := server["jwt"].(map[string]any)
 	g.Expect(jwt["enabled"]).To(BeFalse())
