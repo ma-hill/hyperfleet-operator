@@ -123,49 +123,36 @@ func selectorLabels(name string) map[string]string {
 	}
 }
 
-// dbSecretEnv builds one database-credential env var sourced from a key in the
-// database Secret. The value is never inlined: it is read at pod start via
-// secretKeyRef, keeping credentials out of the pod spec and out of config.yaml.
-// Optional=false (the default) means the pod fails to start if the
-// Secret or key is missing, which is the desired fail-closed behavior.
-func dbSecretEnv(name, secretName, key string) corev1.EnvVar {
-	return corev1.EnvVar{
-		Name: name,
-		ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-				Key:                  key,
-			},
-		},
-	}
-}
-
 // deployment builds the API Deployment. Image is injected by the operator.
-// Database credentials are wired as secretKeyRef env vars, and TLS/JWKS Secrets
-// are mounted read-only when the corresponding spec fields are set
-// (HYPERFLEET-1408). Replicas and resources remain the fixed 1407 baseline
-// (profile→resources is out of scope for 1408). The config-hash pod-template
-// annotation is added later by the controller, not here.
+// Database credentials are delivered via a read-only Secret mount plus
+// HYPERFLEET_DATABASE_*_FILE env vars (HYPERFLEET-1603, api.DefaultImage
+// v0.4.0+), and TLS/JWKS Secrets are mounted read-only when the corresponding
+// spec fields are set (HYPERFLEET-1408). Replicas and resources remain the
+// fixed 1407 baseline (profile→resources is out of scope for 1408). The
+// config-hash pod-template annotation is added later by the controller, not
+// here.
 func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string) *appsv1.Deployment {
 	dbSecret := cr.Spec.API.Database.SecretRef.Name
 
-	// Base env: config file location plus the five database credentials. The API
-	// reads database credentials only from the environment, so these are injected
-	// here rather than written to config.yaml.
+	// Base env: config file location plus the five database credential file
+	// paths. Values are never inlined — each var is a literal path into the
+	// read-only mount below, resolved by the API at startup (ResolveFileOverrides).
 	env := []corev1.EnvVar{
 		{Name: envConfig, Value: configFilePath},
-		dbSecretEnv(envDBHost, dbSecret, SecretKeyDBHost),
-		dbSecretEnv(envDBPort, dbSecret, SecretKeyDBPort),
-		dbSecretEnv(envDBName, dbSecret, SecretKeyDBName),
-		dbSecretEnv(envDBUsername, dbSecret, SecretKeyDBUser),
-		dbSecretEnv(envDBPassword, dbSecret, SecretKeyDBPassword),
+		{Name: envDBHostFile, Value: dbHostFilePath},
+		{Name: envDBPortFile, Value: dbPortFilePath},
+		{Name: envDBNameFile, Value: dbNameFilePath},
+		{Name: envDBUsernameFile, Value: dbUsernameFilePath},
+		{Name: envDBPasswordFile, Value: dbPasswordFilePath},
 	}
 
-	// Base volumes/mounts: the config ConfigMap (read-only) and writable /tmp.
-	// TLS and JWKS Secret mounts are appended below only when referenced, so a
-	// minimal CR produces a minimal pod spec.
+	// Base volumes/mounts: the config ConfigMap and the database Secret
+	// (both read-only) plus writable /tmp. The database mount is unconditional —
+	// spec.api.database.secretRef is required, unlike the TLS/JWKS mounts
+	// appended below only when their optional spec fields are set.
 	volumeMounts := []corev1.VolumeMount{
 		{Name: configVolume, MountPath: configMountPath, ReadOnly: true},
+		{Name: dbVolume, MountPath: dbMountPath, ReadOnly: true},
 		{Name: tmpVolume, MountPath: "/tmp"},
 	}
 	volumes := []corev1.Volume{
@@ -175,6 +162,12 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: ConfigMapName},
 				},
+			},
+		},
+		{
+			Name: dbVolume,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: dbSecret},
 			},
 		},
 		{

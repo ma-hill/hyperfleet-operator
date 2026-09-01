@@ -42,6 +42,10 @@ const (
 	// reconciler specs never perform live OIDC discovery (a network call). The
 	// Secret need not actually exist: Render only checks jwkCertSecretRef is set.
 	testJWKSSecretName = "hyperfleet-jwks"
+	// testInvalidSecretName fails SecretReference.Name's DNS-1123 Pattern marker,
+	// which is inlined independently at every field that embeds a
+	// SecretReference (database, tls, jwkCertSecretRef).
+	testInvalidSecretName = "Invalid_Name"
 )
 
 // These specs exercise the CRD's declarative validation and defaulting through a
@@ -268,6 +272,17 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			Expect(k8sClient.Create(ctx, obj)).To(Succeed())
 			DeferCleanup(deleteSingletonAndWait, ctx)
 		})
+
+		It("rejects a JWKS secret name that is not a DNS-1123 subdomain", func() {
+			// SecretReference.Name's Pattern marker is inlined independently at every
+			// field (database, tls, and this one); jwkCertSecretRef was the only one
+			// with no dedicated spec. Mirrors the database and tls cases above.
+			obj := validHyperFleetConfig()
+			obj.Spec.API.Auth.JWKCertSecretRef = &hyperfleetv1alpha1.SecretReference{Name: testInvalidSecretName}
+			err := k8sClient.Create(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("jwkCertSecretRef.name"))
+		})
 	})
 
 	Context("required fields", func() {
@@ -284,7 +299,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 
 		It("rejects a database secret name that is not a DNS-1123 subdomain", func() {
 			obj := validHyperFleetConfig()
-			obj.Spec.API.Database.SecretRef.Name = "Invalid_Name"
+			obj.Spec.API.Database.SecretRef.Name = testInvalidSecretName
 			err := k8sClient.Create(ctx, obj)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("database.secretRef.name"))
@@ -328,7 +343,7 @@ var _ = Describe("HyperFleetConfig CRD validation", func() {
 			// database case in the "required fields" context.
 			obj := validHyperFleetConfig()
 			obj.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
-				SecretRef: hyperfleetv1alpha1.SecretReference{Name: "Invalid_Name"},
+				SecretRef: hyperfleetv1alpha1.SecretReference{Name: testInvalidSecretName},
 			}
 			err := k8sClient.Create(ctx, obj)
 			Expect(err).To(HaveOccurred())

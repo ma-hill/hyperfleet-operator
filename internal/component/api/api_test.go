@@ -178,31 +178,31 @@ func TestRenderDeploymentDatabaseEnv(t *testing.T) {
 	g := NewWithT(t)
 
 	dep := deploymentFrom(t, testCR())
-	env := map[string]*corev1.EnvVarSource{}
+
+	// The database Secret is mounted read-only, unconditionally (unlike the
+	// optional TLS/JWKS mounts), so its keys surface as files.
+	g.Expect(volumeSecretName(dep, dbVolume)).To(Equal(testDBSecret))
+	g.Expect(mountReadOnlyAt(dep, dbVolume)).To(Equal(dbMountPath))
+
+	env := map[string]string{}
 	for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
-		env[e.Name] = e.ValueFrom
+		g.Expect(e.ValueFrom).To(BeNil(), "expected %s as a literal path, not a secretKeyRef", e.Name)
+		env[e.Name] = e.Value
 	}
 
-	// HYPERFLEET_CONFIG is a literal path (no ValueFrom); credentials come from the
-	// database Secret via secretKeyRef and must never be inlined as literals.
-	g.Expect(dep.Spec.Template.Spec.Containers[0].Env[0].Name).To(Equal("HYPERFLEET_CONFIG"))
-	g.Expect(dep.Spec.Template.Spec.Containers[0].Env[0].Value).To(Equal(configFilePath))
-
+	// HYPERFLEET_CONFIG and the five database *_FILE vars are all literal paths
+	// into read-only mounts — never a credential value, and never a secretKeyRef
+	// (HYPERFLEET-1603: the API reads these files itself at startup).
+	g.Expect(env).To(HaveKeyWithValue("HYPERFLEET_CONFIG", configFilePath))
 	cases := map[string]string{
-		envDBHost:     SecretKeyDBHost,
-		envDBPort:     SecretKeyDBPort,
-		envDBName:     SecretKeyDBName,
-		envDBUsername: SecretKeyDBUser,
-		envDBPassword: SecretKeyDBPassword,
+		envDBHostFile:     dbHostFilePath,
+		envDBPortFile:     dbPortFilePath,
+		envDBNameFile:     dbNameFilePath,
+		envDBUsernameFile: dbUsernameFilePath,
+		envDBPasswordFile: dbPasswordFilePath,
 	}
-	for envName, key := range cases {
-		src := env[envName]
-		g.Expect(src).NotTo(BeNil(), "expected env %s", envName)
-		g.Expect(src.SecretKeyRef).NotTo(BeNil(), "expected %s via secretKeyRef", envName)
-		g.Expect(src.SecretKeyRef.Name).To(Equal(testDBSecret))
-		g.Expect(src.SecretKeyRef.Key).To(Equal(key))
-		// No literal value alongside the reference.
-		g.Expect(env[envName]).NotTo(BeNil())
+	for envName, path := range cases {
+		g.Expect(env).To(HaveKeyWithValue(envName, path))
 	}
 }
 

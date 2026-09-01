@@ -29,7 +29,19 @@ import (
 // DefaultImage is the compiled-in fallback image used when the operator is not
 // given RELATED_IMAGE_HYPERFLEET_API. Production deployments override it with a
 // digest-pinned image via that env var (OLM relatedImages convention).
-const DefaultImage = "quay.io/openshift-hyperfleet/hyperfleet-api:v0.2.1"
+//
+// Must be v0.3.0 or later: config.yaml renders entities (pkg/registry) and the
+// multi-issuer server.jwt.configs list, neither of which exist in v0.2.x's
+// config schema — the API's loader uses viper's UnmarshalExact, so a v0.2.x
+// binary rejects this config and crash-loops at startup (verified field-for-field
+// against hyperfleet-api's pkg/config/server.go and pkg/registry at each tag;
+// see PR #6 review discussion).
+//
+// Pinned to v0.4.0 specifically because it also carries
+// HYPERFLEET-1603 (hyperfleet-api#364, merged to main 2026-09-01): database
+// credentials via HYPERFLEET_DATABASE_*_FILE (ResolveFileOverrides in
+// pkg/config/db.go) — verified field-for-field present at the v0.4.0 tag.
+const DefaultImage = "quay.io/openshift-hyperfleet/hyperfleet-api:v0.4.0"
 
 // Component renders the HyperFleet API operand. It satisfies the bundle.Component
 // contract structurally (no import of internal/bundle, avoiding an import cycle:

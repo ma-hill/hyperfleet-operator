@@ -45,6 +45,13 @@ const (
 	tlsSecretHashID = "tls"
 )
 
+// blockedLoopbackIssuer is a loopback address the default (hardened) discovery
+// client always refuses to dial (see blockDiscoveryDial), so a discovery call
+// against it fails immediately without touching the network. Used where a test
+// needs any reliably-failing discovery call and doesn't care about the error
+// itself — e.g. proving the default client is built once and reused.
+const blockedLoopbackIssuer = "http://127.0.0.1:1"
+
 // discoveryCR returns an auth-enabled CR with no pinned JWKS source, so
 // resolveJWKSURL falls through to OIDC discovery against the given issuer.
 func discoveryCR(issuer string) *hyperfleetv1alpha1.HyperFleetConfig {
@@ -176,6 +183,26 @@ func TestDiscoverJWKSURLErrors(t *testing.T) {
 	_, err = r.discoverJWKSURL(context.Background(), empty.URL)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(err.Error()).To(ContainSubstring("no jwks_uri"))
+}
+
+func TestDiscoverJWKSURLReusesDefaultClient(t *testing.T) {
+	g := NewWithT(t)
+
+	// HTTPClient is deliberately left nil to exercise the lazily-built default
+	// client. The dial is expected to fail — the default client blocks loopback
+	// destinations (TestDiscoveryHTTPClientBlocksLoopbackDial) — the point here
+	// is only that the client is constructed once and reused across calls, not
+	// the discovery outcome.
+	r := &HyperFleetConfigReconciler{}
+	_, err := r.discoverJWKSURL(context.Background(), blockedLoopbackIssuer)
+	g.Expect(err).To(HaveOccurred())
+	first := r.discoveryClient
+	g.Expect(first).NotTo(BeNil())
+
+	_, err = r.discoverJWKSURL(context.Background(), blockedLoopbackIssuer)
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(r.discoveryClient).To(BeIdenticalTo(first),
+		"the default client must be built once (discoveryClientOnce) and reused, not rebuilt per call")
 }
 
 func TestResolveJWKSURLCachesSuccessfulDiscovery(t *testing.T) {

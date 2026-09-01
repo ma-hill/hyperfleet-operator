@@ -27,8 +27,10 @@ import (
 // configuration surface (github.com/openshift-hyperfleet/hyperfleet-api,
 // pkg/config): only the keys the operator owns are emitted; everything else
 // falls back to the API's own defaults. In particular the database block is
-// deliberately absent — database credentials are injected as environment
-// variables (secretKeyRef), never written into config.yaml.
+// deliberately absent — database credentials are delivered via a read-only
+// Secret mount and HYPERFLEET_DATABASE_*_FILE env vars pointing at it (see the
+// env var const block below), never written into config.yaml and never
+// inlined as literal values anywhere in the pod spec.
 //
 // Determinism: sigs.k8s.io/yaml marshals via encoding/json and then sorts map
 // keys, so a given input always produces byte-identical output. That stability
@@ -39,6 +41,22 @@ import (
 // secret material are mounted read-only under configMountPath; the paths written
 // into config.yaml below must match the VolumeMounts declared in render.go.
 const (
+	// dbMountPath is where the database Secret is mounted, read-only, so its keys
+	// surface as files the API reads via the HYPERFLEET_DATABASE_*_FILE
+	// convention (HYPERFLEET-1603, api.DefaultImage v0.4.0+). Unlike TLS/JWKS this
+	// mount is unconditional: spec.api.database.secretRef is required, not
+	// optional.
+	dbMountPath = configMountPath + "/db"
+	dbVolume    = "db"
+
+	// dbHostFilePath etc. are the five database credential keys as files, fed to
+	// the API's database.{host,port,name,username,password}_file.
+	dbHostFilePath     = dbMountPath + "/" + SecretKeyDBHost
+	dbPortFilePath     = dbMountPath + "/" + SecretKeyDBPort
+	dbNameFilePath     = dbMountPath + "/" + SecretKeyDBName
+	dbUsernameFilePath = dbMountPath + "/" + SecretKeyDBUser
+	dbPasswordFilePath = dbMountPath + "/" + SecretKeyDBPassword
+
 	// tlsMountPath is where the TLS Secret (kubernetes.io/tls) is mounted when
 	// spec.api.tls is set; its keys surface as files under this directory.
 	tlsMountPath = configMountPath + "/tls"
@@ -65,8 +83,8 @@ const (
 )
 
 // Secret data keys the operator reads. These are a shared source of truth: the
-// deployment builder (render.go) wires them into secretKeyRef/volume mounts and
-// the controller reads the same keys for the rollout hash.
+// deployment builder (render.go) wires them into volume mounts and the
+// controller reads the same keys for the rollout hash.
 const (
 	// Database credential keys (spec.api.database.secretRef). Note the API
 	// consumes db.user as HYPERFLEET_DATABASE_USERNAME — the Secret key and the
@@ -86,20 +104,28 @@ const (
 )
 
 // Database credential environment variable names, following the HyperFleet
-// Configuration Standard (HYPERFLEET_<SECTION>_<KEY>). The API reads database
-// credentials only from the environment (no *_FILE variant is wired for the
-// non-file credential fields), so these are injected via secretKeyRef.
+// Configuration Standard (HYPERFLEET_<SECTION>_<KEY>). These are the *_FILE
+// variant (HYPERFLEET-1603, api.DefaultImage v0.4.0+): the database Secret is
+// mounted read-only (dbMountPath) and each var points at the mounted file
+// rather than carrying a value, per ResolveFileOverrides in hyperfleet-api's
+// pkg/config/db.go. This — not the plain (non-_FILE) env vars — is what the
+// 1408 acceptance criteria and the Configuration Standard mean by "using the
+// file-based secret convention, with no credentials inlined in the ConfigMap
+// or environment variables": the pod spec carries only a Secret name and a
+// file path, never a credential value, matching how TLS/JWKS are already
+// delivered. v0.3.1 and earlier have no *_FILE support at all — see
+// api.DefaultImage's comment before ever pointing this wiring at an older tag.
 const (
 	// envConfig points the API at the mounted config file (configFilePath). It is
 	// a named constant alongside the database env vars so the single source of
 	// truth is shared between render.go and its tests.
 	envConfig = "HYPERFLEET_CONFIG"
 
-	envDBHost     = "HYPERFLEET_DATABASE_HOST"
-	envDBPort     = "HYPERFLEET_DATABASE_PORT"
-	envDBName     = "HYPERFLEET_DATABASE_NAME"
-	envDBUsername = "HYPERFLEET_DATABASE_USERNAME"
-	envDBPassword = "HYPERFLEET_DATABASE_PASSWORD"
+	envDBHostFile     = "HYPERFLEET_DATABASE_HOST_FILE"
+	envDBPortFile     = "HYPERFLEET_DATABASE_PORT_FILE"
+	envDBNameFile     = "HYPERFLEET_DATABASE_NAME_FILE"
+	envDBUsernameFile = "HYPERFLEET_DATABASE_USERNAME_FILE"
+	envDBPasswordFile = "HYPERFLEET_DATABASE_PASSWORD_FILE"
 )
 
 // configHeader is prepended to the marshaled YAML. It is a fixed string so it

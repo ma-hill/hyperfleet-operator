@@ -59,10 +59,16 @@ type Config struct {
 }
 
 // cloudCAPIEntities is the entity registration set for the cloud-capi bundle.
-// It is lifted verbatim from the HyperFleet API's shipped
-// configs/config.yaml.example so the operator-rendered config.yaml registers the
-// same resource types the API expects for this deployment flavor. Keep it in
-// sync with the API's example if the entity set changes.
+// It is lifted verbatim (verified field-for-field) from hyperfleet-api's
+// configs/config.yaml.example at the tag api.DefaultImage pins, so the
+// operator-rendered config.yaml registers the same resource types that image's
+// API binary expects. "Keep it in sync with the API's example" is doing real
+// work here: this set, the pinned image version, and that version's config
+// schema (pkg/registry, server.jwt shape) all move together — bumping one
+// without the others is exactly how PR #6's review caught a v0.2.1 binary
+// rejecting this config at startup (UnmarshalExact). There is no automated
+// check across repos for this; it is a manual invariant to watch when either
+// side changes.
 var cloudCAPIEntities = []api.EntityDescriptor{
 	{
 		Kind:              "Cluster",

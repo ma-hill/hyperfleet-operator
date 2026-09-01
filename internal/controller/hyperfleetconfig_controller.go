@@ -53,10 +53,20 @@ type HyperFleetConfigReconciler struct {
 	// RELATED_IMAGE_HYPERFLEET_API in main.go; empty falls back to the API
 	// component's compiled-in default.
 	APIImage string
-	// HTTPClient performs OIDC discovery requests. Nil falls back to a hardened
-	// default client (see discoverJWKSURL); tests inject one pointed at an
-	// httptest server.
+	// HTTPClient performs OIDC discovery requests. Nil falls back to a lazily-built,
+	// reused hardened default client (see discoverJWKSURL/discoveryClientOnce);
+	// tests inject one pointed at an httptest server, bypassing that default
+	// entirely.
 	HTTPClient *http.Client
+
+	// discoveryClientOnce/discoveryClient lazily construct the default discovery
+	// client exactly once per reconciler instance, so repeated reconciles reuse
+	// one http.Transport (and its connection pool) instead of leaking a fresh one
+	// per call — a fresh net.Dialer-backed Transport has IdleConnTimeout's zero
+	// value (no limit), so discarding it after one request never closes whatever
+	// connection it opened.
+	discoveryClientOnce sync.Once
+	discoveryClient     *http.Client
 
 	// discoveryCacheMu guards discoveryCache.
 	discoveryCacheMu sync.Mutex

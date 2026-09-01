@@ -203,10 +203,12 @@ func main() {
 		LeaderElectionID:       "85932bfd.redhat.com",
 		// Every referenced Secret (database/TLS/JWKS) lives in the operator's own
 		// namespace (see SecretReference), so the informer never needs to watch or
-		// cache Secrets anywhere else. Without this, the default cache watches
-		// Secrets cluster-wide and every Secret on the cluster ends up in operator
-		// memory, which is also why the ClusterRole needs cluster-wide list/watch
-		// on secrets (see config/rbac/role.yaml and HYPERFLEET-1529).
+		// cache Secrets anywhere else. Without this, the default cache would watch
+		// Secrets cluster-wide even though the secrets RBAC grant is already a
+		// namespaced Role, not a ClusterRole rule (see config/rbac/role.yaml and
+		// config/rbac/secrets_role_binding.yaml). HYPERFLEET-1529 tracks scoping
+		// the remaining operand-management verbs (deployments/services/etc.) the
+		// same way; this PR only narrows the secrets grant.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: {Namespaces: map[string]cache.Config{operatorNamespace: {}}},

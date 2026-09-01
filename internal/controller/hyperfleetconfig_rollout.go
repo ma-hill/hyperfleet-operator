@@ -70,9 +70,11 @@ const discoveryTimeout = 10 * time.Second
 // to refuse following any redirect.
 var errNoDiscoveryRedirects = errors.New("OIDC discovery does not follow redirects")
 
-// newDiscoveryHTTPClient returns the default client used when no HTTPClient is
-// injected (production; tests always inject one pointed at an httptest
-// server). spec.api.auth.issuer is partner-supplied — anyone able to update the
+// newDiscoveryHTTPClient constructs the default client used when no HTTPClient
+// is injected (production; tests always inject one pointed at an httptest
+// server, and never reach this constructor). Callers must build it once and
+// reuse it — see discoveryClientOnce — rather than call this per request.
+// spec.api.auth.issuer is partner-supplied — anyone able to update the
 // HyperFleetConfig singleton controls discoveryURL — so this client is hardened
 // against using that as a pivot into the controller's network:
 //   - CheckRedirect refuses every redirect, so a discovery endpoint cannot send
@@ -203,7 +205,11 @@ func (r *HyperFleetConfigReconciler) discoverJWKSURL(ctx context.Context, issuer
 
 	httpClient := r.HTTPClient
 	if httpClient == nil {
-		httpClient = newDiscoveryHTTPClient()
+		// Built once per reconciler instance and reused across every discovery
+		// call — see discoveryClientOnce's doc comment for why a fresh client per
+		// call is a resource leak, not just wasted allocation.
+		r.discoveryClientOnce.Do(func() { r.discoveryClient = newDiscoveryHTTPClient() })
+		httpClient = r.discoveryClient
 	}
 
 	resp, err := httpClient.Do(req)
