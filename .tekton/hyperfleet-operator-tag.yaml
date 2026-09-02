@@ -4,17 +4,18 @@ metadata:
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/openshift-hyperfleet/hyperfleet-operator?rev={{revision}}
     build.appstudio.redhat.com/commit_sha: '{{revision}}'
-    build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
-    pipelinesascode.tekton.dev/cancel-in-progress: "true"
+    pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
-      == "main"
+    pipelinesascode.tekton.dev/on-cel-expression: |
+      event == "push"
+      && target_branch.matches("^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+(-rc[0-9]+)?$")
+  creationTimestamp: null
   labels:
     appstudio.openshift.io/application: hyperfleet
     appstudio.openshift.io/component: hyperfleet-operator
     pipelines.appstudio.openshift.io/type: build
-  name: hyperfleet-operator-on-pull-request
+  name: hyperfleet-operator-on-tag
   namespace: hyperfleet-tenant
 spec:
   params:
@@ -22,10 +23,10 @@ spec:
     value: '{{source_url}}'
   - name: revision
     value: '{{revision}}'
+  - name: target-branch
+    value: '{{target_branch}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator:on-pr-{{revision}}
-  - name: image-expires-after
-    value: 5d
+    value: quay.io/redhat-user-workloads/hyperfleet-tenant/hyperfleet/hyperfleet-operator:{{revision}}
   - name: dockerfile
     value: ./Dockerfile
   - name: path-context
