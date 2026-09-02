@@ -8,12 +8,16 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main"
-      && !("bundle.konflux.Dockerfile".pathChanged()
-           || "bundle.Dockerfile".pathChanged()
-           || "bundle-hack/***".pathChanged()
-           || "bundle/***".pathChanged()
-           || ".tekton/hyperfleet-operator-bundle-push.yaml".pathChanged())
+    pipelinesascode.tekton.dev/on-cel-expression: |
+      event == "push"
+      && target_branch == "main"
+      && !(files.all.all(x,
+           x.matches('^bundle\\.konflux\\.Dockerfile$')
+           || x.matches('^bundle\\.Dockerfile$')
+           || x.matches('^bundle-hack/')
+           || x.matches('^bundle/')
+           || x.matches('^\\.tekton/hyperfleet-operator-bundle-push\\.yaml$')
+         ))
   labels:
     appstudio.openshift.io/application: hyperfleet
     appstudio.openshift.io/component: hyperfleet-operator
