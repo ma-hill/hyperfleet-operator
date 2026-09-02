@@ -2,8 +2,6 @@ ARG BASE_IMAGE=registry.access.redhat.com/ubi9-micro:latest
 
 FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1786351949 AS builder
 
-ARG APP_VERSION="0.0.0-dev"
-
 USER root
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -23,11 +21,13 @@ RUN CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     go build -trimpath -ldflags="-s -w" -o manager ./cmd/main.go
 
 # Runtime stage
-FROM ${BASE_IMAGE} as final
+FROM ${BASE_IMAGE} AS final
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
 USER 65532:65532
+
+ARG APP_VERSION="0.0.0-dev"
 
 ENTRYPOINT ["/manager"]
 
