@@ -47,7 +47,7 @@ LABEL operators.operatorframework.io.test.config.v1=tests/scorecard/
 # Copy patched manifests from builder, metadata and tests from source.
 COPY --from=operator /workdir/bundle/manifests /manifests/
 COPY --from=operator /workdir/bundle/metadata /metadata/
-COPY bundle/tests/scorecard /tests/scorecard/
+COPY --from=operator /workdir/bundle/tests/scorecard /tests/scorecard/
 
 ARG APP_VERSION="0.0.0-dev"
 LABEL name="hyperfleet-operator-bundle" \
