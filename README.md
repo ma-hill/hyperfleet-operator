@@ -8,7 +8,7 @@ hyperfleet-operator packages and delivers HyperFleet as a standard Kubernetes op
 
 ## Installation guides
 
-- [Developer workflow: operator and bundle images](docs/bundle.md)
+- [OLM bundle + catalog workflow + developer installation example](docs/olm.md)
 - [Disconnected OpenShift installation with oc-mirror v2](docs/disconnected-install.md)
 
 The disconnected workflow mirrors the published catalog. The catalog selects
@@ -23,10 +23,14 @@ the OLM bundle and its related images.
 - Access to a Kubernetes v1.11.3+ cluster.
 
 ### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
-
+**Build and push your image to the location specified by `OPERATOR_IMG`:**
 ```sh
-make docker-build docker-push IMG=<some-registry>/hyperfleet-operator:tag
+# set your QUAY_USER to push to personal image regsitry
+export QUAY_USER=<YOUR_QUAY_USERNAME>
+
+# Build and push the operator image
+make image-dev OPERATOR_IMG=...
+# default OPERATOR_IMG=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
 ```
 
 **NOTE:** This image ought to be published in the personal registry you specified.
@@ -39,10 +43,11 @@ Make sure you have the proper permission to the registry if the above commands d
 make install
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+**Deploy the Manager to the cluster with the image specified by `OPERATOR_IMG`:**
 
 ```sh
-make deploy IMG=<some-registry>/hyperfleet-operator:tag
+make deploy OPERATOR_IMG=...
+# default OPERATOR_IMG=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
 ```
 
 > **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
@@ -76,9 +81,7 @@ make uninstall
 make undeploy
 ```
 
-
-
-### Observability endpoints
+## Observability
 
 The manager exposes the standard HyperFleet observability endpoints (defaults):
 
