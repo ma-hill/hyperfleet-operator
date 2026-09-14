@@ -1,6 +1,6 @@
 ARG BASE_IMAGE=registry.access.redhat.com/ubi9-micro:latest
 
-FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1788409979 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:9.8-1789040808 AS builder
 
 # APP_VERSION/GIT_SHA are injected into the binary below via -ldflags -X, so
 # hyperfleet_operator_build_info reports the real release/commit instead of
