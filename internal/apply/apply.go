@@ -47,8 +47,10 @@ const FieldManager = "hyperfleet-operator"
 //     to operator-owned fields are reclaimed.
 //
 // Each object must carry its GVK (TypeMeta) — server-side apply requires it.
-// Errors are wrapped with the object's kind and name so the caller can see which
-// operand failed.
+// After apply, the object is re-read in place so callers can inspect the live
+// state the API server now holds (including status written by other
+// controllers) without issuing their own Get. Errors are wrapped with the
+// object's kind and name so the caller can see which operand failed.
 func Objects(
 	ctx context.Context,
 	c client.Client,
@@ -72,6 +74,9 @@ func Objects(
 		ac := client.ApplyConfigurationFromUnstructured(&unstructured.Unstructured{Object: content})
 		if err := c.Apply(ctx, ac, client.FieldOwner(FieldManager), client.ForceOwnership); err != nil {
 			return fmt.Errorf("apply %s %q: %w", kind, obj.GetName(), err)
+		}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+			return fmt.Errorf("refresh %s %q after apply: %w", kind, obj.GetName(), err)
 		}
 	}
 	return nil
