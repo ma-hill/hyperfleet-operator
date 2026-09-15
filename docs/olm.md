@@ -1,21 +1,21 @@
 # Hyperfleet-Operator Installation via OLM
 
-## Pre-merge checks
-1. Updates to bundle.Dockerfile are also reflected in bundle.konflux.Dockerfile
-2. bundle/ is correctly updated before merging
-3. config/manager/kustomization.yaml is not wrongly updated
-
 ## CI Image Build - Operator Image + Operator Bundle + Operator Catalog
 
-Konflux Workflow:
+Konflux uses a cascading build-nudge chain to keep operator, bundle, and catalog images in sync. Each stage triggers the next automatically:
 
-1. Konflux builds the operator image and publishes it to quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator
-2. Konflux automatically updates image references for the operator image in the bundle.konflux.Dockerfile. This will automatically get merged.
-3. The operator-bundle-push .tekton pipeline will be triggered by the update to the bundle.konflux.Dockerfile. So this new operator image update will trigger the build once merged into main. Note - `bundle.konflux.Dockerfile` runs `update_bundle.sh` with the new operator image reference. `update_bundle.sh` uses yq to update the CSV to ensure the operator deployment has proper values - image, relatedImages, annotations, etc. Once completed the pipeline publishes the operator-bundle to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-bundle`
-5. Konflux will subsequently update the image reference for the operator-bundle image in `konflux-template.yaml`. Auto-merging the update.
-6. The operator-catalog-push .tekton pipeline will be triggered by the update to the `konflux-template.yaml`. This pipeline will build operator-catalog image and push it to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-catalog.
+```
+operator image ──nudge──▶ bundle image ──nudge──▶ catalog image
+```
 
-> **Note**: Any update to [bundle.konflux.Dockerfile](../bundle.konflux.Dockerfile) will trigger the operator-bundle-push pipeline and any update to [konflux-template.yaml](../catalog/konflux-template.yaml) will trigger the operator-catalog-push pipeline.
+1. **Operator image build** — Konflux builds and releases the operator image to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator`.
+
+2. **Nudge to bundle** — Konflux auto-merges the new operator image digest into `config/manager/prod/kustomization.yaml`. This commit triggers the `operator-bundle-push` pipeline, which builds a new bundle image containing the updated operator reference.
+   > Updates to `RELATED_IMAGE_HYPERFLEET_API` also trigger this pipeline.
+
+3. **Nudge to catalog** — Konflux auto-merges the new bundle image digest into `catalog/konflux-template.yaml`. This commit triggers the `operator-catalog-push` pipeline, which builds the catalog image and publishes it to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-catalog`.
+
+> **Note**: Manual changes to [bundle.Dockerfile](../bundle.Dockerfile) or `config/manager/prod/kustomization.yaml` will also trigger the bundle pipeline. Similarly, changes to [konflux-template.yaml](../catalog/konflux-template.yaml) or [catalog.Dockerfile](../catalog.Dockerfile) will trigger the catalog pipeline.
 
 > **TODO** - HYPERFLEET-1617 - Update documentation based on release details for the catalog. Currently no upgrade graph for the hyperfleet-operator.
 
@@ -41,15 +41,12 @@ For local development and installation, set your Quay username to automatically 
    make image-dev OPERATOR_IMG=...
    # default OPERATOR_IMG=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
    ```
-3. **Update the bundle with your OPERATOR_IMG:**
+3. **Build the bundle image:**
    ```bash
-   make bundle-override-img OPERATOR_IMG=...
-   ```
-**Note** When running `bundle-override-img` the bundle/ and bundle.Dockerfile get regenerated in place, so make sure to check these changes before committing them.
-4. **Build the bundle image:**
-   ```bash
-   make bundle-build BUNDLE_IMG=...
+   make bundle-build BUNDLE_IMG=... RELATED_IMAGE_HYPERFLEET_OPERATOR=... RELATED_IMAGE_HYPERFLEET_API=...
    # default BUNDLE_IMG=quay.io/$QUAY_USER/hyperfleet-operator-bundle:v$(VERSION)
+   # default RELATED_IMAGE_HYPERFLEET_OPERATOR=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
+   # default RELATED_IMAGE_HYPERFLEET_API=quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
    # default VERSION = 0.0.1
    ```
 5. **Push the bundle image:**

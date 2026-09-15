@@ -61,9 +61,6 @@ spec:
     Delivers HyperFleet as a standard Kubernetes operator, installed and
     managed through OLM. It exposes a single cluster-scoped CR: HyperFleetConfig.
   displayName: HyperFleet Operator
-  icon:
-  - base64data: ""
-    mediatype: ""
   install:
     spec:
       deployments: null
