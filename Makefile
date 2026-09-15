@@ -182,11 +182,12 @@ run: manifests generate fmt vet ## Run a controller from your host.
 
 # Image configuration
 PLATFORM ?= linux/amd64
-QUAY_REPO ?= openshift-hyperfleet
+QUAY_USER ?=
+QUAY_REPO ?= $(if $(QUAY_USER),$(QUAY_USER),openshift-hyperfleet)
 IMG_REGISTRY ?= quay.io/$(QUAY_REPO)
 IMG_NAME ?= hyperfleet-operator
 IMG_TAG ?= $(APP_VERSION)
-IMG ?= $(IMG_REGISTRY)/$(IMG_NAME):$(IMG_TAG)
+OPERATOR_IMG ?= $(IMG_REGISTRY)/$(IMG_NAME):$(IMG_TAG)
 # Base image for production builds - matches Dockerfile default
 # Override with DEV_BASE_IMAGE for dev builds (see image-dev target)
 BASE_IMAGE ?= registry.access.redhat.com/ubi9-micro:latest
@@ -215,21 +216,21 @@ endif
 
 .PHONY: image
 image: check-container-tool manifests generate fmt vet ## Build container image with configurable registry/tag
-	@echo "Building container image $(IMG)..."
+	@echo "Building container image $(OPERATOR_IMG)..."
 	$(CONTAINER_TOOL) build \
 		--platform $(PLATFORM) \
 		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
 		--build-arg APP_VERSION=$(APP_VERSION) \
 		--build-arg GIT_SHA=$(GIT_SHA) \
-		-t $(IMG) .
-	@echo "Image built: $(IMG)"
-	@echo "$(IMG)"
+		-t $(OPERATOR_IMG) .
+	@echo "Image built: $(OPERATOR_IMG)"
+	@echo "$(OPERATOR_IMG)"
 
 .PHONY: image-push
 image-push: check-container-tool ## Push container image to registry
-	@echo "Pushing image $(IMG)..."
-	$(CONTAINER_TOOL) push $(IMG)
-	@echo "Image pushed: $(IMG)"
+	@echo "Pushing image $(OPERATOR_IMG)..."
+	$(CONTAINER_TOOL) push $(OPERATOR_IMG)
+	@echo "Image pushed: $(OPERATOR_IMG)"
 
 .PHONY: image-build-push
 image-build-push: image image-push ## Build and push container image to registry
@@ -246,43 +247,12 @@ endif
 # Usage: QUAY_USER=myuser make image-dev
 # Dev image configuration - set QUAY_USER to push to personal registry
 DEV_TAG ?= dev-$(GIT_SHA)
-QUAY_USER ?=
 DEV_BASE_IMAGE ?= registry.access.redhat.com/ubi9/ubi-minimal:latest
 
 .PHONY: image-dev
-image-dev: QUAY_REPO = $(QUAY_USER)
 image-dev: IMG_TAG = $(DEV_TAG)
 image-dev: BASE_IMAGE = $(DEV_BASE_IMAGE)
 image-dev: check-quay-user image-build-push ## Build and push dev image to dev Quay registry (requires QUAY_USER)
-
-# If you wish to build the manager image targeting other platforms you can use the --platform flag.
-# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
-# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-.PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
-
-.PHONY: docker-push
-docker-push: ## Push docker image with the manager.
-	$(CONTAINER_TOOL) push ${IMG}
-
-# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
-# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
-# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
-# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
-.PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name hyperfleet-operator-builder
-	$(CONTAINER_TOOL) buildx use hyperfleet-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm hyperfleet-operator-builder
-	rm Dockerfile.cross
-
 
 ##@ Deployment
 
@@ -389,31 +359,46 @@ bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then v
 .PHONY: bundle-override-img
 bundle-override-img: manifests operator-sdk ## Generate bundle with IMG override, then restore kustomization.yaml
 	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(OPERATOR_IMG)
 	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
 	$(OPERATOR_SDK) bundle validate ./bundle
-	@echo "Bundle generated with IMG=$(IMG)"
+	@echo "Bundle generated with $(OPERATOR_IMG)"
 	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
-	$(CONTAINER_TOOL) build -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+	$(CONTAINER_TOOL) build --platform=$(PLATFORM) -f bundle.Dockerfile -t $(BUNDLE_IMG) .
 
 .PHONY: bundle-push
-bundle-push: ## Push the bundle image.
-	$(MAKE) docker-push IMG=$(BUNDLE_IMG)
+bundle-push: check-container-tool ## Push bundle image to registry
+	@echo "Pushing image $(BUNDLE_IMG)..."
+	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
+	@echo "Image pushed: $(BUNDLE_IMG)"
 
-# Build a catalog image by adding bundle images to an empty catalog using the operator package manager tool, 'opm'.
-# This recipe invokes 'opm' in 'semver' bundle add mode. For more information on add modes, see:
-# https://github.com/operator-framework/community-operators/blob/7f1438c/docs/packaging-operator.md#updating-your-existing-operator
+TEMPLATEFILE ?= dev-template.yaml
+.PHONY: catalog-template-update-bundle-img
+catalog-template-update-bundle-img: ## Update the bundle image in the TEMPLATEFILE
+	@if [ ! -f catalog/$(TEMPLATEFILE) ]; then \
+		echo "Error: Template file catalog/$(TEMPLATEFILE) does not exist"; \
+		exit 1; \
+	fi
+	@sed -i.bak 's|image: .*|image: $(BUNDLE_IMG)|' catalog/$(TEMPLATEFILE) && rm catalog/$(TEMPLATEFILE).bak
+	@echo "Updated catalog/$(TEMPLATEFILE) with image: $(BUNDLE_IMG)"
+
 .PHONY: catalog-build
-catalog-build: opm ## Build a catalog image.
-	$(OPM) index add --container-tool $(CONTAINER_TOOL) --mode semver --tag $(CATALOG_IMG) --bundles $(BUNDLE_IMGS) $(FROM_INDEX_OPT)
+catalog-build: ## Build the catalog image with TEMPLATEFILE overrides 
+	$(CONTAINER_TOOL) build \
+		-f catalog.Dockerfile \
+		--platform $(PLATFORM) \
+		--build-arg TEMPLATEFILE="$(TEMPLATEFILE)" \
+		--build-arg APP_VERSION="$(APP_VERSION)" \
+		-t $(CATALOG_IMG) .
 
-# Push the catalog image.
 .PHONY: catalog-push
-catalog-push: ## Push a catalog image.
-	$(MAKE) docker-push IMG=$(CATALOG_IMG)
+catalog-push: check-container-tool ## Push catalog image to registry
+	@echo "Pushing image $(CATALOG_IMG)..."
+	$(CONTAINER_TOOL) push $(CATALOG_IMG)
+	@echo "Image pushed: $(CATALOG_IMG)"
 
 ##@ Dependencies
 
