@@ -1,0 +1,20 @@
+resources:
+- ../bases/
+patches:
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/env/1
+      value:
+        name: RELATED_IMAGE_HYPERFLEET_API
+        value: ${RELATED_IMAGE_HYPERFLEET_API}
+    - op: replace
+      path: /spec/template/spec/containers/0/env/2
+      value:
+        name: RELATED_IMAGE_HYPERFLEET_OPERATOR
+        value: ${RELATED_IMAGE_HYPERFLEET_OPERATOR}
+    - op: replace
+      path: /spec/template/spec/containers/0/image
+      value: ${RELATED_IMAGE_HYPERFLEET_OPERATOR}
+  target:
+    kind: Deployment
+    name: controller-manager

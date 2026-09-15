@@ -1,10 +1,10 @@
 # These resources constitute the fully configured set of manifests
 # used to generate the 'manifests/' directory in a bundle.
 resources:
-- bases/hyperfleet-operator.clusterserviceversion.yaml
-- ../default
-- ../samples
-- ../scorecard
+- hyperfleet-operator.clusterserviceversion.yaml
+- ../../default
+- ../../samples
+- ../../scorecard
 # The Prometheus ServiceMonitor is deliberately NOT included in the bundle. OLM
 # applies a bundle's arbitrary manifests but does not install the CRDs they need,
 # so bundling the ServiceMonitor would fail the InstallPlan — and block the whole

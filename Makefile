@@ -188,6 +188,9 @@ IMG_REGISTRY ?= quay.io/$(QUAY_REPO)
 IMG_NAME ?= hyperfleet-operator
 IMG_TAG ?= $(APP_VERSION)
 OPERATOR_IMG ?= $(IMG_REGISTRY)/$(IMG_NAME):$(IMG_TAG)
+export RELATED_IMAGE_HYPERFLEET_OPERATOR ?= $(OPERATOR_IMG)
+export RELATED_IMAGE_HYPERFLEET_API ?= quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
+
 # Base image for production builds - matches Dockerfile default
 # Override with DEV_BASE_IMAGE for dev builds (see image-dev target)
 BASE_IMAGE ?= registry.access.redhat.com/ubi9-micro:latest
@@ -282,23 +285,16 @@ undeploy: ## Undeploy controller from the K8s cluster specified in ~/.kube/confi
 
 # Non-olm installs
 # Generates dist/install.yaml
-# Install resources
-# kubectl apply -f dist/install.yaml
-# Uninstall resources
-# kubectl delete -f dist/install.yaml
-# For image overrides edit config/manager/kustomization.yaml
+# Install resources:  kubectl apply -f dist/install.yaml
+# Uninstall resources: kubectl delete -f dist/install.yaml
+# Override images via env vars:
+#   make build-deployer RELATED_IMAGE_HYPERFLEET_OPERATOR=<op-img> RELATED_IMAGE_HYPERFLEET_API=<api-img>
+
 .PHONY: build-deployer
 build-deployer: manifests generate ## Generate a consolidated YAML with CRDs and deployment.
 	@mkdir -p dist
-	@$(KUSTOMIZE) build config/default > dist/install.yaml
+	@$(KUSTOMIZE) build config/default | envsubst > dist/install.yaml
 
-.PHONY: build-deployer-override-img
-build-deployer-override-img: manifests generate ## Generate deployer with IMG override, then restore kustomization.yaml
-	@mkdir -p dist
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(IMG)
-	@$(KUSTOMIZE) build config/default > dist/install.yaml
-	@echo "Deployer generated with IMG=$(IMG)"
-	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
 
 # For now `stable` channel is the default and only channel
 # CHANNELS define the bundle channels used in the bundle.
@@ -350,24 +346,21 @@ ifneq ($(origin CATALOG_BASE_IMG), undefined)
 FROM_INDEX_OPT := --from-index $(CATALOG_BASE_IMG)
 endif
 
-.PHONY: bundle
-bundle: manifests operator-sdk ## Generate bundle manifests and metadata, then validate generated files.
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-
-.PHONY: bundle-override-img
-bundle-override-img: manifests operator-sdk ## Generate bundle with IMG override, then restore kustomization.yaml
-	$(OPERATOR_SDK) generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image controller=$(OPERATOR_IMG)
-	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
-	$(OPERATOR_SDK) bundle validate ./bundle
-	@echo "Bundle generated with $(OPERATOR_IMG)"
-	@echo "Note: config/manager/kustomization.yaml has been modified. Commit or reset as needed."
-
+# Substitutes RELATED_IMAGE_* env vars into patch-images.yaml via envsubst,
+# then builds the bundle image. This mirrors the Konflux pipeline bundle build.
+# To override the operator and API images:
+#   make bundle-build RELATED_IMAGE_HYPERFLEET_OPERATOR=<image> RELATED_IMAGE_HYPERFLEET_API=<image>
+KUSTOMIZE_VARIANT ?= config/manifests/dev
 .PHONY: bundle-build
-bundle-build: ## Build the bundle image.
-	$(CONTAINER_TOOL) build --platform=$(PLATFORM) -f bundle.Dockerfile -t $(BUNDLE_IMG) .
+bundle-build: ## Builds the bundle and bundle image.
+	cat config/manifests/dev/patch-images.yaml | envsubst > config/manifests/dev/kustomization.yaml
+	$(CONTAINER_TOOL) build -f bundle.Dockerfile \
+		--platform $(PLATFORM) \
+		--build-arg VERSION=$(VERSION) \
+		--build-arg CHANNELS=$(CHANNELS) \
+		--build-arg KUSTOMIZE_VARIANT=$(KUSTOMIZE_VARIANT) \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		-t $(BUNDLE_IMG) .
 
 .PHONY: bundle-push
 bundle-push: check-container-tool ## Push bundle image to registry
