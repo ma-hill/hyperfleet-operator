@@ -1,5 +1,5 @@
 # Building stage
-FROM registry.redhat.io/openshift4/ose-operator-registry-rhel9:v4.22 AS builder
+FROM registry.access.redhat.com/openshift4/ose-operator-framework-tools-rhel9@sha256:785270e976b3b080acaf0d8a22c268e41392b3690ce6a391823d640915f17b39 AS builder
 
 WORKDIR /workspace
 
@@ -16,7 +16,7 @@ RUN /bin/opm alpha render-template basic \
         -o yaml ./template.yaml > catalog.yaml
 
 # Final serving stage
-FROM registry.redhat.io/openshift4/ose-operator-registry-rhel9:v4.18 AS serve
+FROM registry.access.redhat.com/openshift4/ose-operator-framework-tools-rhel9@sha256:785270e976b3b080acaf0d8a22c268e41392b3690ce6a391823d640915f17b39 AS serve
 
 COPY --from=builder /workspace/catalog.yaml /configs/hyperfleet-operator/catalog.yaml
 
