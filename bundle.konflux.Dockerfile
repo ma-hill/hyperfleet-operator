@@ -14,7 +14,7 @@ FROM builder-runner AS builder
 ARG HYPERFLEET_OPERATOR_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:b7803da7d6931296024354f353a61cae275936717ae07dfdb46fe86cee47362b"
 ENV HYPERFLEET_OPERATOR_IMAGE_PULLSPEC=${HYPERFLEET_OPERATOR_IMAGE_PULLSPEC}
 
-ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:02d3affd92c8117a39a8a47e001815e4dfb7b53d77392bcbd87920d211e816f1"
+ARG HYPERFLEET_API_IMAGE_PULLSPEC="quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:7ed75c76344501769c0b843dcfc85d7a8eb3898401fb335e126fede0cb1abe90"
 ENV HYPERFLEET_API_IMAGE_PULLSPEC=${HYPERFLEET_API_IMAGE_PULLSPEC}
 
 COPY hack/bundle .
