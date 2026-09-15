@@ -1,5 +1,5 @@
 # Building stage
-FROM registry.redhat.io/openshift4/ose-operator-registry-rhel9:v4.18 AS builder
+FROM registry.redhat.io/openshift4/ose-operator-registry-rhel9:v4.22 AS builder
 
 WORKDIR /workspace
 
