@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -110,7 +112,7 @@ type HyperFleetConfigReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
-func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, reterr error) {
 	log := logf.FromContext(ctx)
 
 	// Record reconcile latency regardless of outcome, and error rate by the stage
@@ -129,6 +131,26 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("get HyperFleetConfig %q: %w", req.NamespacedName, err)
 	}
 
+	// componentConditions, componentsCollected and missingSecrets feed
+	// aggregateStatus in the deferred status update below. They are populated as
+	// reconciliation proceeds so that a mid-loop failure (reterr set, named
+	// return) still writes status with whatever was learned before the failure
+	// — e.g. a missing Secret discovered before a later component's apply fails
+	// still surfaces as Degraded. componentsCollected is set true only once the
+	// per-component loop below completes without error; aggregateStatus uses it
+	// to avoid publishing a fabricated Available/Progressing value when the
+	// real state was never actually checked this reconcile.
+	var componentConditions []metav1.Condition
+	var componentsCollected bool
+	var missingSecrets []string
+	defer func() {
+		if aggregateStatus(cr, componentConditions, componentsCollected, missingSecrets, reterr) {
+			if err := r.Status().Update(ctx, cr); err != nil {
+				reterr = errors.Join(reterr, fmt.Errorf("update status: %w", err))
+			}
+		}
+	}()
+
 	// Resolve the JWKS URL. When auth is on and the CR pins neither a JWKS URL nor
 	// a JWKS Secret, this performs OIDC discovery — a network read, so it lives
 	// here rather than in the pure renderer. Empty otherwise.
@@ -141,13 +163,18 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Read each referenced Secret's resourceVersion for the rollout hash. A
 	// rotation bumps resourceVersion without changing the rendered config.yaml or
 	// the pod spec, so without hashing it the pods would keep running with stale
-	// credentials/certs. Missing Secrets are not fatal here (validation and the
-	// Degraded condition are HYPERFLEET-1512); they are hashed as absent so the
-	// pods roll once the Secret appears.
+	// credentials/certs. A missing Secret is not fatal here — it is hashed as
+	// absent so the pods roll once the Secret appears — but it does drive the
+	// Degraded condition via missingSecrets below.
 	secretData, err := r.referencedSecretData(ctx, cr)
 	if err != nil {
 		metrics.IncReconcileError("secrets")
 		return ctrl.Result{}, fmt.Errorf("read referenced secrets: %w", err)
+	}
+	for _, e := range secretData {
+		if !e.present {
+			missingSecrets = append(missingSecrets, e.id)
+		}
 	}
 
 	components, err := bundle.Resolve(cr.Spec.Bundle, bundle.Config{
@@ -187,19 +214,27 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		commitRollouts(rollouts)
 		// Publish operand readiness from the freshly applied state.
 		r.recordReadiness(ctx, component.Name(), objs)
+		// apply.Objects patches each object in place via server-side apply, so objs
+		// now carries whatever status the API server currently has for it (e.g. the
+		// Deployment controller's last-written replica counts) — Conditions reads
+		// that back rather than performing its own Get.
+		conds, err := component.Conditions(ctx, cr, objs)
+		if err != nil {
+			metrics.IncReconcileError("conditions")
+			return ctrl.Result{}, fmt.Errorf("get conditions for component %q: %w", component.Name(), err)
+		}
+		componentConditions = append(componentConditions, conds...)
 	}
+	componentsCollected = true
 
 	// Publish the digest of the config we just applied: the spec plus every
 	// component's config-rollout hash, so a Secret rotation or resolved-value
 	// drift (e.g. OIDC discovery) shows up here even when the spec itself did not
 	// change.
 	metrics.SetAppliedConfigHash(hashConfig(cr.Spec, componentConfigHashes))
-
-	// TODO(HYPERFLEET-1409): roll each component's Conditions up into
-	// status.conditions and set status.observedGeneration.
 	// TODO(HYPERFLEET-1512): enforce that referenced Secrets exist in
-	// r.OperatorNamespace and surface a Degraded condition when one is missing
-	// (today a missing Secret is tolerated and merely hashed as absent).
+	// r.OperatorNamespace beyond driving the Degraded condition above — e.g.
+	// rejecting or fast-failing before Render/Apply run at all.
 
 	log.Info("reconciled HyperFleetConfig",
 		"bundle", cr.Spec.Bundle, "components", len(components), "namespace", r.OperatorNamespace)
