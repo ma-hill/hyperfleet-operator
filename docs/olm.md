@@ -10,12 +10,12 @@ operator image ──nudge──▶ bundle image ──nudge──▶ catalog im
 
 1. **Operator image build** — Konflux builds and releases the operator image to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator`.
 
-2. **Nudge to bundle** — Konflux auto-merges the new operator image digest into `config/manager/prod/kustomization.yaml`. This commit triggers the `operator-bundle-push` pipeline, which builds a new bundle image containing the updated operator reference.
+2. **Nudge to bundle** — Konflux auto-merges the new operator image digest into `config/manifests/prod/kustomization.yaml`. This commit triggers the `operator-bundle-push` pipeline, which builds a new bundle image containing the updated operator reference.
    > Updates to `RELATED_IMAGE_HYPERFLEET_API` also trigger this pipeline.
 
 3. **Nudge to catalog** — Konflux auto-merges the new bundle image digest into `catalog/konflux-template.yaml`. This commit triggers the `operator-catalog-push` pipeline, which builds the catalog image and publishes it to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-catalog`.
 
-> **Note**: Manual changes to [bundle.Dockerfile](../bundle.Dockerfile) or `config/manager/prod/kustomization.yaml` will also trigger the bundle pipeline. Similarly, changes to [konflux-template.yaml](../catalog/konflux-template.yaml) or [catalog.Dockerfile](../catalog.Dockerfile) will trigger the catalog pipeline.
+> **Note**: Manual changes to [bundle.Dockerfile](../bundle.Dockerfile) or `config/manifests/prod/kustomization.yaml` will also trigger the bundle pipeline. Similarly, changes to [konflux-template.yaml](../catalog/konflux-template.yaml) or [catalog.Dockerfile](../catalog.Dockerfile) will trigger the catalog pipeline.
 
 > **TODO** - HYPERFLEET-1617 - Update documentation based on release details for the catalog. Currently no upgrade graph for the hyperfleet-operator.
 
