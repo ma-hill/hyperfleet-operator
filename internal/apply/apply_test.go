@@ -31,7 +31,10 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
-const API = "api"
+const (
+	api            = "api"
+	deploymentKind = "Deployment"
+)
 
 // TestObjectsRefreshesRenderedObjects verifies the contract internal/bundle
 // relies on: after apply, the same typed object instance is refreshed with the
@@ -57,10 +60,10 @@ func TestObjectsRefreshesRenderedObjects(t *testing.T) {
 	live := &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: appsv1.SchemeGroupVersion.String(),
-			Kind:       "Deployment",
+			Kind:       deploymentKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      API,
+			Name:      api,
 			Namespace: "hyperfleet-system",
 		},
 		Status: appsv1.DeploymentStatus{
@@ -84,7 +87,7 @@ func TestObjectsRefreshesRenderedObjects(t *testing.T) {
 	rendered := &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: appsv1.SchemeGroupVersion.String(),
-			Kind:       "Deployment",
+			Kind:       deploymentKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      live.Name,
@@ -94,7 +97,7 @@ func TestObjectsRefreshesRenderedObjects(t *testing.T) {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
-						{Name: API, Image: "example.com/api:latest"},
+						{Name: api, Image: "example.com/api:latest"},
 					},
 				},
 			},
@@ -133,10 +136,10 @@ func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
 	writerObj := &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: appsv1.SchemeGroupVersion.String(),
-			Kind:       "Deployment",
+			Kind:       deploymentKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      API,
+			Name:      api,
 			Namespace: "hyperfleet-system",
 		},
 	}
@@ -163,7 +166,7 @@ func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
 	rendered := &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: appsv1.SchemeGroupVersion.String(),
-			Kind:       "Deployment",
+			Kind:       deploymentKind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      writerObj.Name,
@@ -173,7 +176,7 @@ func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
-						{Name: API, Image: "example.com/api:latest"},
+						{Name: api, Image: "example.com/api:latest"},
 					},
 				},
 			},
@@ -188,7 +191,7 @@ func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
 	g.Expect(rendered.Status.ObservedGeneration).To(Equal(readerObj.Status.ObservedGeneration))
 
 	written := &appsv1.Deployment{}
-	written.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
+	written.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind(deploymentKind))
 	err = writer.Get(context.Background(), client.ObjectKeyFromObject(writerObj), written)
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(written.OwnerReferences).NotTo(BeEmpty())
