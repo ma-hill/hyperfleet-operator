@@ -7,8 +7,10 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
-      == "main"
+    pipelinesascode.tekton.dev/on-cel-expression: |
+     event == "push" && target_branch
+      == "main" && (".tekton/hyperfleet-operator-catalog-push.yaml".pathChanged() ||
+      "catalog.Dockerfile".pathChanged() || "catalog/***".pathChanged() )
   labels:
     appstudio.openshift.io/application: hyperfleet
     appstudio.openshift.io/component: hyperfleet-operator-catalog
@@ -224,6 +226,7 @@ spec:
         value: $(tasks.clone-repository.results.commit)
       - name: BUILD_ARGS
         value:
+        - TEMPLATEFILE=konflux-template.yaml
         - $(params.build-args[*])
       - name: BUILD_ARGS_FILE
         value: $(params.build-args-file)
