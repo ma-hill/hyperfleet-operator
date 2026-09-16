@@ -226,7 +226,7 @@ spec:
       - name: BUILD_ARGS
         value:
         - $(params.build-args[*])
-        - KUSTOMIZE_VARIANT=config/manifests/prod/kustomization.yaml
+        - KUSTOMIZE_VARIANT=config/manifests/prod
       - name: BUILD_ARGS_FILE
         value: $(params.build-args-file)
       - name: PRIVILEGED_NESTED
