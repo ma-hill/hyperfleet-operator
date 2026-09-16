@@ -258,6 +258,7 @@ func main() {
 
 	if err := (&controller.HyperFleetConfigReconciler{
 		Client:            mgr.GetClient(),
+		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		OperatorNamespace: operatorNamespace,
 		APIImage:          apiImage,

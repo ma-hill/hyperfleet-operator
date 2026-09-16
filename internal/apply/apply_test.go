@@ -99,11 +99,97 @@ func TestObjectsRefreshesRenderedObjects(t *testing.T) {
 		},
 	}
 
-	err := Objects(context.Background(), c, owner, scheme, []client.Object{rendered})
+	err := Objects(context.Background(), c, nil, owner, scheme, []client.Object{rendered})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(rendered.Status.AvailableReplicas).To(Equal(live.Status.AvailableReplicas))
 	g.Expect(rendered.Status.UpdatedReplicas).To(Equal(live.Status.UpdatedReplicas))
 	g.Expect(rendered.Status.ObservedGeneration).To(Equal(live.Status.ObservedGeneration))
 	g.Expect(rendered.OwnerReferences).NotTo(BeEmpty())
+}
+
+// TestObjectsRefreshUsesProvidedReader verifies the post-apply refresh can read
+// from a different source than the writer, which is how the reconciler bypasses
+// the manager cache with GetAPIReader.
+func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
+	g := NewWithT(t)
+
+	scheme := runtime.NewScheme()
+	g.Expect(hyperfleetv1alpha1.AddToScheme(scheme)).To(Succeed())
+	g.Expect(appsv1.AddToScheme(scheme)).To(Succeed())
+
+	owner := &hyperfleetv1alpha1.HyperFleetConfig{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: hyperfleetv1alpha1.GroupVersion.String(),
+			Kind:       "HyperFleetConfig",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: hyperfleetv1alpha1.SingletonName,
+		},
+	}
+
+	writerObj := &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: appsv1.SchemeGroupVersion.String(),
+			Kind:       "Deployment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api",
+			Namespace: "hyperfleet-system",
+		},
+	}
+
+	readerObj := writerObj.DeepCopy()
+	readerObj.Status = appsv1.DeploymentStatus{
+		Replicas:           3,
+		AvailableReplicas:  2,
+		ReadyReplicas:      2,
+		UpdatedReplicas:    2,
+		ObservedGeneration: 11,
+	}
+
+	writer := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&appsv1.Deployment{}).
+		WithObjects(writerObj.DeepCopy()).
+		Build()
+	reader := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(readerObj.DeepCopy()).
+		Build()
+
+	rendered := &appsv1.Deployment{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: appsv1.SchemeGroupVersion.String(),
+			Kind:       "Deployment",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      writerObj.Name,
+			Namespace: writerObj.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{Name: "api", Image: "example.com/api:latest"},
+					},
+				},
+			},
+		},
+	}
+
+	err := Objects(context.Background(), writer, reader, owner, scheme, []client.Object{rendered})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(rendered.Status.AvailableReplicas).To(Equal(readerObj.Status.AvailableReplicas))
+	g.Expect(rendered.Status.UpdatedReplicas).To(Equal(readerObj.Status.UpdatedReplicas))
+	g.Expect(rendered.Status.ObservedGeneration).To(Equal(readerObj.Status.ObservedGeneration))
+
+	written := &appsv1.Deployment{}
+	written.SetGroupVersionKind(appsv1.SchemeGroupVersion.WithKind("Deployment"))
+	err = writer.Get(context.Background(), client.ObjectKeyFromObject(writerObj), written)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(written.OwnerReferences).NotTo(BeEmpty())
+	g.Expect(written.Spec.Template.Spec.Containers).To(HaveLen(1))
+	g.Expect(written.Spec.Template.Spec.Containers[0].Image).To(Equal("example.com/api:latest"))
 }

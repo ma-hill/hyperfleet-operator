@@ -50,7 +50,11 @@ import (
 // reconciles each component's operands via server-side apply.
 type HyperFleetConfigReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the manager cache for the handful of reads that need
+	// read-after-write coherence, such as refreshing freshly applied operands
+	// before deriving rollup conditions from their live status.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 	// OperatorNamespace is the namespace the operator runs in and where all
 	// operands are created. Sourced from OPERATOR_NAMESPACE (downward API) in main.go.
 	OperatorNamespace string
@@ -207,15 +211,20 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		// apply — retried on the next reconcile — is not counted as a rollout that
 		// never happened.
 		rollouts := r.detectRollouts(ctx, component.Name(), objs)
-		if err := apply.Objects(ctx, r.Client, cr, r.Scheme, objs); err != nil {
+		refreshReader := r.APIReader
+		if refreshReader == nil {
+			refreshReader = r.Client
+		}
+		if err := apply.Objects(ctx, r.Client, refreshReader, cr, r.Scheme, objs); err != nil {
 			metrics.IncReconcileError("apply")
 			return ctrl.Result{}, fmt.Errorf("apply component %q: %w", component.Name(), err)
 		}
 		commitRollouts(rollouts)
 		// Publish operand readiness from the freshly applied state.
 		r.recordReadiness(ctx, component.Name(), objs)
-		// apply.Objects patches each object in place via server-side apply, so objs
-		// now carries whatever status the API server currently has for it (e.g. the
+		// apply.Objects patches each object via server-side apply, then refreshes
+		// it in place through an uncached reader when available, so objs now
+		// carries whatever status the API server currently has for it (e.g. the
 		// Deployment controller's last-written replica counts) — Conditions reads
 		// that back rather than performing its own Get.
 		conds, err := component.Conditions(ctx, cr, objs)
