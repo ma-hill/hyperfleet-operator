@@ -31,6 +31,8 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 )
 
+const API = "api"
+
 // TestObjectsRefreshesRenderedObjects verifies the contract internal/bundle
 // relies on: after apply, the same typed object instance is refreshed with the
 // live state from the API server, including status written by another
@@ -58,7 +60,7 @@ func TestObjectsRefreshesRenderedObjects(t *testing.T) {
 			Kind:       "Deployment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "api",
+			Name:      API,
 			Namespace: "hyperfleet-system",
 		},
 		Status: appsv1.DeploymentStatus{
@@ -92,7 +94,7 @@ func TestObjectsRefreshesRenderedObjects(t *testing.T) {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
-						{Name: "api", Image: "example.com/api:latest"},
+						{Name: API, Image: "example.com/api:latest"},
 					},
 				},
 			},
@@ -134,7 +136,7 @@ func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
 			Kind:       "Deployment",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "api",
+			Name:      API,
 			Namespace: "hyperfleet-system",
 		},
 	}
@@ -171,7 +173,7 @@ func TestObjectsRefreshUsesProvidedReader(t *testing.T) {
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
-						{Name: "api", Image: "example.com/api:latest"},
+						{Name: API, Image: "example.com/api:latest"},
 					},
 				},
 			},
