@@ -480,6 +480,8 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		cr := getCR()
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionFalse))
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+		progressingBeforeFailure := conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing)
+		observedGenerationBeforeFailure := cr.Status.ObservedGeneration
 
 		By("pointing auth at an issuer whose discovery endpoint fails, so OIDC discovery errors before referencedSecretData or any component ever runs")
 		badDiscovery := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -505,6 +507,11 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionFalse),
 			"Available must remain at its last-recorded value, not be fabricated True")
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(progressingBeforeFailure.Status),
+			"Progressing must remain at its last-recorded value when reconcile fails before any component reports")
+		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Reason).To(Equal(progressingBeforeFailure.Reason))
+		Expect(cr.Status.ObservedGeneration).To(Equal(observedGenerationBeforeFailure),
+			"top-level observedGeneration must stay pinned to the last fully processed generation")
 	})
 
 	It("returns a wrapped error when the operand namespace is absent", func() {
