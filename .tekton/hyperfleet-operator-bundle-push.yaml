@@ -227,6 +227,7 @@ spec:
         value:
         - $(params.build-args[*])
         - KUSTOMIZE_VARIANT=config/manifests/prod
+        - BUNDLE_VERSION=0.0.1
       - name: BUILD_ARGS_FILE
         value: $(params.build-args-file)
       - name: PRIVILEGED_NESTED
