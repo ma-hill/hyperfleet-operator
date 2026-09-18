@@ -11,25 +11,24 @@ FROM quay.io/konflux-ci/operator-sdk-builder:latest@sha256:bd34ca58b2d08e8ee3b9c
 
 WORKDIR /workdir
 COPY config/ ./config/
-
 COPY --from=validator /workdir/bin/related-images-validator ./related-images-validator
-# Specify the kustomize variant, either bases/kustomization.yaml or prod/kustomization.yaml
-# prod/kustomization.yaml gets image update references from konflux.
+
+# Specify the kustomize variant, either config/manifests/dev or config/manifests/prod
 ARG KUSTOMIZE_VARIANT=config/manifests/dev
-# ARG KUSTOMIZE_VARIANT=config/manifests/prod for konflux builds
 RUN kustomize build /workdir/${KUSTOMIZE_VARIANT} > /workdir/manifests.yaml
 
 ARG CHANNELS=stable
 ARG DEFAULT_CHANNEL=stable
 ARG BUNDLE_VERSION=0.0.1
-
 RUN mkdir -p /workdir/bundle
 RUN cat manifests.yaml | operator-sdk generate bundle -q --version ${BUNDLE_VERSION} \
       --channels=${CHANNELS} --default-channel=${DEFAULT_CHANNEL} \
       --package=hyperfleet-operator && \
-    operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2 && \
-    if [ "${VALIDATE_RELATED_IMAGES}" = "true" ]; then \
-      operator-sdk bundle validate ./bundle --alpha-select-external ./related-images-validator; \
+    operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
+
+ARG VALIDATE_RELATED_IMAGES=true
+RUN if [ "$VALIDATE_RELATED_IMAGES" = "true" ]; then \
+      ./related-images-validator -csv bundle/manifests/*.clusterserviceversion.yaml; \
     fi
 
 FROM scratch
