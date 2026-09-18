@@ -70,6 +70,19 @@ func TestVerifyBuiltBundleCSV(t *testing.T) {
 		{"duplicate relatedImage", func(s string) string {
 			return s + "  - name: extra\n    image: " + apiImage + "\n"
 		}, "duplicate value of image"},
+		{"same env in two containers is valid", func(s string) string {
+			sidecar := "\n              - name: sidecar\n" +
+				"                image: " + operatorImage + "\n" +
+				"                env:\n" +
+				"                - name: RELATED_IMAGE_HYPERFLEET_API\n" +
+				"                  value: " + apiImage
+			return strings.Replace(s, "  relatedImages:", sidecar+"\n  relatedImages:", 1)
+		}, ""},
+		{"duplicate env with unknown value", func(s string) string {
+			dup := "\n                - name: RELATED_IMAGE_HYPERFLEET_API\n" +
+				"                  value: " + extraImage
+			return strings.Replace(s, "  relatedImages:", dup+"\n  relatedImages:", 1)
+		}, "env var duplicated"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

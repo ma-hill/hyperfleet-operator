@@ -94,6 +94,13 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println(string(out))
+
+	// Exits with status code 1 when passing in csvPath
+	// operator-sdk reads errors from the JSON output; standalone -csv mode needs a non-zero exit code.
+	// operator-sdk bundle validate ./bundle --alpha-select-external will fail on errors in json output
+	if *csvPath != "" && len(result.Errors) > 0 {
+		os.Exit(1)
+	}
 }
 
 func validate(bundleRoot string) manifestResult {
@@ -159,32 +166,26 @@ func validateCSVData(data []byte) manifestResult {
 		}
 	}
 
-	// duplicate env var
-	envRelatedImages := []string{}
 	for _, dep := range csv.Spec.Install.Spec.Deployments {
 		for _, c := range dep.Spec.Template.Spec.Containers {
+			envRelatedImages := []string{}
 			for _, e := range c.Env {
 				if strings.HasPrefix(e.Name, "RELATED_IMAGE_") {
 					if !isSHA256DigestPullspec(e.Value) {
 						result.Errors = append(result.Errors, errMsg("relatedImages",
 							fmt.Sprintf("not using sha256 in image tag: %v", e.Value)))
 					}
-					// verify that every value is in relatedImages section
+					if slices.Contains(envRelatedImages, e.Name) {
+						result.Errors = append(result.Errors,
+							errMsg("relatedImages",
+								fmt.Sprintf("env var duplicated: %v", e)))
+						continue
+					}
+					envRelatedImages = append(envRelatedImages, e.Name)
 					if _, ok := relatedImages[e.Value]; !ok {
 						result.Errors = append(result.Errors,
 							errMsg("relatedImages",
 								fmt.Sprintf("env var not add to relatedImages: %v", e)))
-						continue
-					} else {
-						if slices.Contains(envRelatedImages, e.Name) {
-							// duplicate found
-							result.Errors = append(result.Errors,
-								errMsg("relatedImages",
-									fmt.Sprintf("env var duplicated: %v", e)))
-							continue
-						} else {
-							envRelatedImages = append(envRelatedImages, e.Name)
-						}
 					}
 				}
 			}
