@@ -356,7 +356,7 @@ bundle-build: ## Builds the bundle and bundle image.
 	cat config/manifests/dev/patch-images.yaml | envsubst > config/manifests/dev/kustomization.yaml
 	$(CONTAINER_TOOL) build -f bundle.Dockerfile \
 		--platform $(PLATFORM) \
-		--build-arg VERSION=$(VERSION) \
+		--build-arg BUNDLE_VERSION=$(VERSION) \
 		--build-arg CHANNELS=$(CHANNELS) \
 		--build-arg DEFAULT_CHANNEL=$(DEFAULT_CHANNEL) \
 		--build-arg KUSTOMIZE_VARIANT=$(KUSTOMIZE_VARIANT) \

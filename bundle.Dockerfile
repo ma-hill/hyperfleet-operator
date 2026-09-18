@@ -11,10 +11,11 @@ RUN kustomize build /workdir/${KUSTOMIZE_VARIANT} > /workdir/manifests.yaml
 
 ARG CHANNELS=stable
 ARG DEFAULT_CHANNEL=stable
-ARG VERSION=0.0.1
+ARG BUNDLE_VERSION=0.0.1
+
 RUN mkdir -p /workdir/bundle
-RUN cat manifests.yaml | operator-sdk generate bundle -q --version ${VERSION} \
-      --channels=${CHANNELS} --default-channel=${DEFAULT_CHANNEL} --use-image-digests \
+RUN cat manifests.yaml | operator-sdk generate bundle -q --version ${BUNDLE_VERSION} \
+      --channels=${CHANNELS} --default-channel=${DEFAULT_CHANNEL} \
       --package=hyperfleet-operator && \
     operator-sdk bundle validate ./bundle --select-optional name=operatorhubv2
 
