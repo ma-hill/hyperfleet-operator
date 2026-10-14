@@ -257,7 +257,7 @@ spec:
         - APP_VERSION=$(tasks.extract-version.results.VERSION)
         - KUSTOMIZE_VARIANT=config/manifests/prod
         - BUNDLE_VERSION=$(tasks.extract-version.results.VERSION)
-        - CHANNELS=candidate-$(tasks.extract-version.results.MAJOR_VERSION),stable-$(tasks.parse-version.results.MAJOR_VERSION)
+        - CHANNELS=candidate-$(tasks.extract-version.results.MAJOR_VERSION),stable-$(tasks.extract-version.results.MAJOR_VERSION)
         - DEFAULT_CHANNEL=stable-$(tasks.extract-version.results.MAJOR_VERSION)
         - VALIDATE_RELATED_IMAGES=true
       - name: PRIVILEGED_NESTED
