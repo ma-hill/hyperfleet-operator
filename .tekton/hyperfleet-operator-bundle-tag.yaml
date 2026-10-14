@@ -1,4 +1,4 @@
-operator-bundleVersion: tekton.dev/v1
+apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
   annotations:
@@ -175,9 +175,9 @@ spec:
           script: |
             #!/usr/bin/env bash
             VERSION="${TAG_REF#refs/tags/bundle-v}"
-            MAJOR="v${VERSION%%.*}"
+            MAJOR_VERSION="v${VERSION%%.*}"
             printf '%s' "$VERSION" > "$(results.VERSION.path)"
-            printf '%s' "$MAJOR" > "$(results.MAJOR.path)"
+            printf '%s' "$MAJOR_VERSION" > "$(results.MAJOR_VERSION.path)"
           env:
           - name: TAG_REF
             value: $(params.TAG_REF)
@@ -257,8 +257,8 @@ spec:
         - APP_VERSION=$(tasks.extract-version.results.VERSION)
         - KUSTOMIZE_VARIANT=config/manifests/prod
         - BUNDLE_VERSION=$(tasks.extract-version.results.VERSION)
-        - CHANNELS=candidate-$(tasks.extract-version.results.MAJOR),stable-$(tasks.parse-version.results.MAJOR)
-        - DEFAULT_CHANNEL=stable-$(tasks.extract-version.results.MAJOR)
+        - CHANNELS=candidate-$(tasks.extract-version.results.MAJOR_VERSION),stable-$(tasks.parse-version.results.MAJOR_VERSION)
+        - DEFAULT_CHANNEL=stable-$(tasks.extract-version.results.MAJOR_VERSION)
         - VALIDATE_RELATED_IMAGES=true
       - name: PRIVILEGED_NESTED
         value: $(params.privileged-nested)
