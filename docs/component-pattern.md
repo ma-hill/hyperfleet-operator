@@ -32,6 +32,7 @@ type Component interface {
     Name() string
     Render(context.Context, *v1alpha1.HyperFleetConfig) ([]client.Object, error)
     Conditions(context.Context, *v1alpha1.HyperFleetConfig, []client.Object) ([]metav1.Condition, error)
+    Rollout() component.RolloutTargets
 }
 ```
 
@@ -112,11 +113,20 @@ changes. Missing Secrets must remain distinguishable from present-but-empty
 inputs, and sensitive values must not be copied into hashes, logs, metrics, or
 rendered nonsensitive configuration.
 
-The current `stampConfigHash` implementation recognizes only the API
-component's well-known ConfigMap and Deployment names. A second configurable
-workload does **not** receive rollout annotations automatically. Generalize the
-rollout-hash contract and add cross-component tests instead of copying API names
-or assuming the current helper covers the new component.
+Each component declares its own config-rollout scope by implementing `Rollout()`
+(see `internal/component.RolloutTargets`): the ConfigMap and data key whose
+rendered content feeds the hash, the Deployment whose pod template receives the
+hash annotation, and the referenced-secret roles (`component.SecretRole*`) the
+component consumes. The controller's `stampConfigHash` hashes and stamps exactly
+those targets — a component that renders a ConfigMap+Deployment pair but returns
+the zero value gets no rollout annotation, and a Secret rotated for another
+component does not roll this one. Declare only the secrets the component
+actually consumes, and cover the declaration with tests: assert the declared
+names match a real render (see
+`TestRolloutNamesTheRenderedConfigAndDeployment` in the component package) and
+that every `SecretRole*` the controller can emit for the consumed spec fields is
+declared (see `TestAPIRolloutTargetsDeclareEveryReferencedSecretRole` in the
+controller suite), so a rename or a new role cannot silently stop rolling pods.
 
 ### 6. Define health and status rollup
 

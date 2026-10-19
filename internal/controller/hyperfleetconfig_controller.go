@@ -200,11 +200,13 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, fmt.Errorf("render component %q: %w", component.Name(), err)
 		}
 		// Stamp the config-hash on the component's Deployment pod template so a
-		// config or secret-value change rolls the pods. For components without a
-		// ConfigMap+Deployment pair (none today besides the API) this is a no-op
-		// beyond the returned hash. The hash is also folded into the applied-config
-		// metric below, so it reflects secret/resolved-value changes too.
-		componentConfigHashes = append(componentConfigHashes, stampConfigHash(objs, secretData))
+		// config or secret-value change rolls the pods. The component's Rollout()
+		// names its own ConfigMap and Deployment and the referenced-secret roles
+		// it consumes, so each component's rollout scope is its own declaration,
+		// never another component's names. The hash is also folded into the
+		// applied-config metric below, so it reflects secret/resolved-value
+		// changes too.
+		componentConfigHashes = append(componentConfigHashes, stampConfigHash(objs, secretData, component.Rollout()))
 		// Detect an imminent operand rollout before applying, while the live object
 		// still reflects the previous desired state. Runs after stampConfigHash so
 		// the desired template it hashes is the final one. The rollout counter

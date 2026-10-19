@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 )
 
 const (
@@ -362,6 +363,35 @@ func TestRenderEmptyImageFallsBackToDefault(t *testing.T) {
 	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(dep.Spec.Template.Spec.Containers[0].Image).To(Equal(DefaultImage))
+}
+
+func TestRolloutNamesTheRenderedConfigAndDeployment(t *testing.T) {
+	g := NewWithT(t)
+
+	// The rollout declaration must name the same ConfigMap, data key and
+	// Deployment Render produces, or the controller's config-hash stamp lands
+	// on nothing and config changes stop rolling the pods. Asserted against a
+	// real render rather than the constants, so a rename in render.go cannot
+	// leave a stale declaration behind.
+	targets := New("img", testNamespace, Options{}).Rollout()
+	objs, err := New("img", testNamespace, Options{}).Render(context.Background(), testCR())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	cm, ok := byKind(objs)["ConfigMap"].(*corev1.ConfigMap)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(targets.ConfigMapName).To(Equal(cm.Name))
+	g.Expect(cm.Data).To(HaveKey(targets.ConfigFileKey))
+
+	dep, ok := byKind(objs)["Deployment"].(*appsv1.Deployment)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(targets.DeploymentName).To(Equal(dep.Name))
+
+	// The API consumes every referenced-secret role the CR can express.
+	g.Expect(targets.SecretRoles).To(ConsistOf(
+		component.SecretRoleDatabase,
+		component.SecretRoleTLS,
+		component.SecretRoleJWKS,
+	))
 }
 
 func TestRenderRoleHasNoRules(t *testing.T) {

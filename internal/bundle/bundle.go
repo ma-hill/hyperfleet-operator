@@ -28,12 +28,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 )
 
 // Component is the contract every component satisfies. It is deliberately tiny —
-// render the desired objects, report health — with no extension points until a
-// second component exists to justify them.
+// render the desired objects, report health, name the rollout targets — with no
+// further extension points until another component justifies them (Rollout was
+// the first such addition, for HYPERFLEET-1673).
 //
 //   - Render is a pure function (CR → desired objects); it must not read or write
 //     the cluster. The controller applies what it returns.
@@ -42,10 +44,15 @@ import (
 //     server's current status (see internal/apply). This avoids giving every
 //     component its own client.Client and an extra round of API reads for state
 //     the controller already has. Consumed starting in HYPERFLEET-1409.
+//   - Rollout names the component's well-known ConfigMap and Deployment so the
+//     controller's config-hash rollout (stampConfigHash) covers the component,
+//     and the referenced-secret roles it consumes so a Secret rotated for
+//     another component does not roll this one. See component.RolloutTargets.
 type Component interface {
 	Name() string
 	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]client.Object, error)
 	Conditions(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error)
+	Rollout() component.RolloutTargets
 }
 
 // Config carries the inputs the resolver needs to construct components.

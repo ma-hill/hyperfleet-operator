@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 )
 
@@ -38,12 +39,14 @@ import (
 // the Secret→request mapping are all pure or use an in-process HTTP server, so
 // they need no API server.
 
-// Hash-entry ids reused across TestComputeConfigHashProperties and
-// TestStampConfigHashSetsAnnotation. One entry per referenced Secret (its
-// resourceVersion), not per key — see referencedSecretData.
+// Hash-entry ids reused across TestComputeConfigHashProperties and the
+// stampConfigHash tests. One entry per referenced Secret (its
+// resourceVersion), not per key — see referencedSecretData. The literals live
+// in the component package (the shared role vocabulary), not here, so the
+// tests cannot drift from what referencedSecretData emits.
 const (
-	dbSecretHashID  = "database"
-	tlsSecretHashID = "tls"
+	dbSecretHashID  = component.SecretRoleDatabase
+	tlsSecretHashID = component.SecretRoleTLS
 )
 
 // blockedLoopbackIssuer is a loopback address the default (hardened) discovery
@@ -425,6 +428,13 @@ func TestComputeConfigHashProperties(t *testing.T) {
 	g.Expect(computeConfigHash("config-a", absent)).NotTo(Equal(computeConfigHash("config-a", presentAbsentLiteral)))
 }
 
+// apiRolloutTargets returns the real API component's rollout declaration, so the
+// stampConfigHash tests exercise exactly what the reconciler passes at runtime
+// rather than a hand-copied (and silently drift-prone) replica of it.
+func apiRolloutTargets() component.RolloutTargets {
+	return apicomponent.New("img", "hyperfleet-system", apicomponent.Options{}).Rollout()
+}
+
 func TestStampConfigHashSetsAnnotation(t *testing.T) {
 	g := NewWithT(t)
 
@@ -452,9 +462,10 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 		return objs
 	}
 
+	targets := apiRolloutTargets()
 	entries := []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h1")}}
 	objs := render()
-	stampConfigHash(objs, entries)
+	stampConfigHash(objs, entries, targets)
 
 	depOf := func(objs []client.Object) *appsv1.Deployment {
 		for _, o := range objs {
@@ -472,13 +483,129 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 
 	// Re-stamping the same render with the same entries yields the same hash.
 	objs2 := render()
-	stampConfigHash(objs2, entries)
+	stampConfigHash(objs2, entries, targets)
 	g.Expect(depOf(objs2).Spec.Template.Annotations[configHashAnnotation]).To(Equal(got))
 
 	// A rotated secret value changes the stamped hash.
 	objs3 := render()
-	stampConfigHash(objs3, []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h2")}})
+	stampConfigHash(objs3, []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h2")}}, targets)
 	g.Expect(depOf(objs3).Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(got))
+}
+
+func TestStampConfigHashScopedToDeclaredTargets(t *testing.T) {
+	g := NewWithT(t)
+
+	cr := &hyperfleetv1alpha1.HyperFleetConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
+		Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
+			Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
+			API: hyperfleetv1alpha1.APISpec{
+				Database: hyperfleetv1alpha1.DatabaseSpec{
+					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
+				},
+				// Auth off keeps the render independent of any JWKS source; these
+				// tests exercise hash scoping, not auth wiring.
+				Auth: hyperfleetv1alpha1.AuthSpec{Enabled: ptr.To(false)},
+			},
+		},
+	}
+	objs, err := apicomponent.New("img", "hyperfleet-system", apicomponent.Options{}).Render(context.Background(), cr)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	depOf := func(objs []client.Object) *appsv1.Deployment {
+		for _, o := range objs {
+			if d, ok := o.(*appsv1.Deployment); ok {
+				return d
+			}
+		}
+		return nil
+	}
+
+	// A component whose targets name none of the rendered objects (its own
+	// well-known names, not the API's): nothing is stamped, and no referenced
+	// Secret — none of its roles declared — reaches its hash, so a rotation
+	// another component consumes cannot roll this one.
+	other := component.RolloutTargets{
+		ConfigMapName:  "other-config",
+		ConfigFileKey:  "config.yaml",
+		DeploymentName: "other",
+	}
+	rotated := []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h2")}}
+	h1 := stampConfigHash(objs, []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h1")}}, other)
+	h2 := stampConfigHash(objs, rotated, other)
+	g.Expect(h1).To(Equal(h2), "an undeclared secret role must not change the hash")
+	g.Expect(depOf(objs).Spec.Template.Annotations).NotTo(HaveKey(configHashAnnotation),
+		"a Deployment the targets do not name must not be stamped")
+}
+
+func TestStampConfigHashIncludesOnlyDeclaredSecretRoles(t *testing.T) {
+	g := NewWithT(t)
+
+	cr := &hyperfleetv1alpha1.HyperFleetConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
+		Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
+			Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
+			API: hyperfleetv1alpha1.APISpec{
+				Database: hyperfleetv1alpha1.DatabaseSpec{
+					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecretName},
+				},
+				// Auth off keeps the render independent of any JWKS source; these
+				// tests exercise hash scoping, not auth wiring.
+				Auth: hyperfleetv1alpha1.AuthSpec{Enabled: ptr.To(false)},
+			},
+		},
+	}
+	render := func() []client.Object {
+		objs, err := apicomponent.New("img", "hyperfleet-system", apicomponent.Options{}).Render(context.Background(), cr)
+		g.Expect(err).NotTo(HaveOccurred())
+		return objs
+	}
+
+	// The real API operand names, but only the database role declared: a
+	// rotation of the TLS Secret (consumed by the API, not by this hypothetical
+	// component) must not change the hash; a database rotation must.
+	targets := component.RolloutTargets{
+		ConfigMapName:  apicomponent.ConfigMapName,
+		ConfigFileKey:  apicomponent.ConfigFileKey,
+		DeploymentName: apicomponent.ResourceName,
+		SecretRoles:    []string{dbSecretHashID},
+	}
+	entries := []hashEntry{
+		{id: dbSecretHashID, present: true, value: []byte("1001")},
+		{id: tlsSecretHashID, present: true, value: []byte("1002")},
+	}
+	h := stampConfigHash(render(), entries, targets)
+
+	rotatedTLS := []hashEntry{
+		{id: dbSecretHashID, present: true, value: []byte("1001")},
+		{id: tlsSecretHashID, present: true, value: []byte("1003")},
+	}
+	g.Expect(stampConfigHash(render(), rotatedTLS, targets)).To(Equal(h),
+		"a secret role the component does not declare must not change the hash")
+
+	rotatedDB := []hashEntry{
+		{id: dbSecretHashID, present: true, value: []byte("1004")},
+		{id: tlsSecretHashID, present: true, value: []byte("1002")},
+	}
+	g.Expect(stampConfigHash(render(), rotatedDB, targets)).NotTo(Equal(h),
+		"a secret role the component declares must change the hash")
+}
+
+func TestAPIRolloutTargetsDeclareEveryReferencedSecretRole(t *testing.T) {
+	g := NewWithT(t)
+
+	// referencedSecretData emits one entry per SecretRole* constant the CR can
+	// reference. If the API component ever stops declaring one of them, that
+	// Secret's rotations silently stop rolling the API pods — the lockstep
+	// guard here fails first.
+	targets := apiRolloutTargets()
+	for _, role := range []string{
+		component.SecretRoleDatabase,
+		component.SecretRoleTLS,
+		component.SecretRoleJWKS,
+	} {
+		g.Expect(targets.SecretRoles).To(ContainElement(role))
+	}
 }
 
 func TestMapSecretToConfig(t *testing.T) {

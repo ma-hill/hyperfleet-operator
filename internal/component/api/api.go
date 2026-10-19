@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 )
 
 // RelatedImageEnv is the release image override supplied by the bundle CSV.
@@ -38,8 +39,10 @@ const DefaultImage = "quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/
 
 // Component renders the HyperFleet API operand. It satisfies the bundle.Component
 // contract structurally (no import of internal/bundle, avoiding an import cycle:
-// bundle imports this package). It carries only rendering inputs and never
-// touches the cluster; the controller applies what Render produces.
+// bundle imports this package; the shared RolloutTargets type lives in the leaf
+// internal/component, which this package may import). It carries only rendering
+// inputs and never touches the cluster; the controller applies what Render
+// produces.
 type Component struct {
 	// Image is the API container image. Empty falls back to DefaultImage.
 	Image string
@@ -79,6 +82,24 @@ func New(image, namespace string, opts Options) *Component {
 // Name identifies the component in logs and the app.kubernetes.io/component label.
 func (c *Component) Name() string {
 	return ComponentName
+}
+
+// Rollout names the operands that drive the API's config-rollout hash: the
+// config ConfigMap + Deployment pair (whose constants are also the shared
+// contract with render.go's builders), and every referenced-secret role the
+// API consumes — a rotation of the database, TLS or JWKS Secret must roll the
+// API pods even though the rendered config.yaml and pod spec are unchanged.
+func (c *Component) Rollout() component.RolloutTargets {
+	return component.RolloutTargets{
+		ConfigMapName:  ConfigMapName,
+		ConfigFileKey:  ConfigFileKey,
+		DeploymentName: ResourceName,
+		SecretRoles: []string{
+			component.SecretRoleDatabase,
+			component.SecretRoleTLS,
+			component.SecretRoleJWKS,
+		},
+	}
 }
 
 // Render returns the full desired-state operand set for the API, in a
