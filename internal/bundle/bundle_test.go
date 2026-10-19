@@ -23,7 +23,10 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
+
+const testNamespace = "hyperfleet-system"
 
 func TestEntitiesForBundleCloudCAPI(t *testing.T) {
 	g := NewWithT(t)
@@ -70,20 +73,67 @@ func TestResolveWiresSharedTierAPIComponent(t *testing.T) {
 	const jwks = "https://issuer.example.com/keys"
 	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
 		APIImage:        "example.com/api:test",
-		Namespace:       "hyperfleet-system",
+		Namespace:       testNamespace,
 		ResolvedJWKSURL: jwks,
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// Phase 1: every bundle resolves to exactly [API].
-	g.Expect(comps).To(HaveLen(1))
-
+	// The API is always first: Sentinel (and any future component) must not
+	// reconcile ahead of the tier it may depend on.
 	comp, ok := comps[0].(*api.Component)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(comp.Image).To(Equal("example.com/api:test"))
-	g.Expect(comp.Namespace).To(Equal("hyperfleet-system"))
+	g.Expect(comp.Namespace).To(Equal(testNamespace))
 	g.Expect(comp.ResolvedJWKSURL).To(Equal(jwks))
 	g.Expect(comp.Entities).To(Equal(cloudCAPIEntities))
+}
+
+func TestResolveWiresSharedTierSentinelComponents(t *testing.T) {
+	g := NewWithT(t)
+
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
+		APIImage:      "example.com/api:test",
+		SentinelImage: "example.com/sentinel:test",
+		Namespace:     testNamespace,
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// One API component plus one Sentinel instance per registered entity.
+	g.Expect(comps).To(HaveLen(1 + len(cloudCAPIEntities)))
+
+	gotResourceTypes := make([]string, 0, len(cloudCAPIEntities))
+	for _, c := range comps[1:] {
+		comp, ok := c.(*sentinel.Component)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(comp.Image).To(Equal("example.com/sentinel:test"))
+		g.Expect(comp.Namespace).To(Equal(testNamespace))
+		g.Expect(comp.APIBaseURL).To(Equal(api.ServiceURL(testNamespace)))
+		gotResourceTypes = append(gotResourceTypes, comp.ResourceType)
+	}
+
+	wantResourceTypes := make([]string, 0, len(cloudCAPIEntities))
+	for _, e := range cloudCAPIEntities {
+		wantResourceTypes = append(wantResourceTypes, e.Plural)
+	}
+	g.Expect(gotResourceTypes).To(Equal(wantResourceTypes))
+}
+
+func TestResolveWiresSentinelBrokerConfig(t *testing.T) {
+	g := NewWithT(t)
+
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
+		Namespace:       testNamespace,
+		BrokerType:      sentinel.BrokerTypeGooglePubSub,
+		BrokerProjectID: "my-gcp-project",
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	for _, c := range comps[1:] {
+		comp, ok := c.(*sentinel.Component)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(comp.BrokerType).To(Equal(sentinel.BrokerTypeGooglePubSub))
+		g.Expect(comp.BrokerProjectID).To(Equal("my-gcp-project"))
+	}
 }
 
 func TestResolveOnPremAgentErrors(t *testing.T) {

@@ -60,6 +60,20 @@ type HyperFleetConfigReconciler struct {
 	// RELATED_IMAGE_HYPERFLEET_API in main.go; empty falls back to the API
 	// component's compiled-in default.
 	APIImage string
+	// SentinelImage is the container image for every Sentinel operand. Sourced
+	// from RELATED_IMAGE_HYPERFLEET_SENTINEL in main.go; empty falls back to the
+	// Sentinel component's compiled-in default.
+	SentinelImage string
+	// BrokerType selects the message broker every Sentinel instance uses.
+	// Sourced from BROKER_TYPE in main.go; empty falls back to
+	// sentinel.DefaultBrokerType. Operator-level, like SentinelImage: broker
+	// type was previously a Helm value, and HyperFleetConfig has no field for
+	// it (HYPERFLEET-1673 scope).
+	BrokerType string
+	// BrokerProjectID is the GCP project id, required when BrokerType is
+	// sentinel.BrokerTypeGooglePubSub. Sourced from
+	// BROKER_GOOGLEPUBSUB_PROJECT_ID in main.go.
+	BrokerProjectID string
 	// HTTPClient performs OIDC discovery requests. Nil falls back to a lazily-built,
 	// reused hardened default client (see discoverJWKSURL/discoveryClientOnce);
 	// tests inject one pointed at an httptest server, bypassing that default
@@ -138,7 +152,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// aggregateStatus in the deferred status update below. They are populated as
 	// reconciliation proceeds so that a mid-loop failure (reterr set, named
 	// return) still writes status with whatever was learned before the failure
-	// — e.g. a missing Secret discovered before a later component's apply fails
+	// — e.g. a missing Secret discovered before a component's apply fails
 	// still surfaces as Degraded. componentsCollected is set true only once the
 	// per-component loop below completes without error; aggregateStatus uses it
 	// to avoid publishing a fabricated Available/Progressing value when the
@@ -184,8 +198,11 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	components, err := bundle.Resolve(cr.Spec.Bundle, bundle.Config{
 		APIImage:        r.APIImage,
+		SentinelImage:   r.SentinelImage,
 		Namespace:       r.OperatorNamespace,
 		ResolvedJWKSURL: jwksURL,
+		BrokerType:      r.BrokerType,
+		BrokerProjectID: r.BrokerProjectID,
 	})
 	if err != nil {
 		metrics.IncReconcileError("bundle")

@@ -68,4 +68,10 @@ const (
 	// SecretRoleJWKS tags the JWKS document Secret
 	// (spec.api.auth.jwkCertSecretRef).
 	SecretRoleJWKS = "jwks"
+	// SecretRoleBroker tags the message-broker credential Secret consumed by
+	// Sentinel (sentinel.BrokerSecretName). Unlike the roles above it is not
+	// derived from a CR field: the broker is operator-internal and never
+	// exposed on HyperFleetConfig (HYPERFLEET-1673), so the Secret name is a
+	// fixed convention rather than a spec reference.
+	SecretRoleBroker = "broker"
 )

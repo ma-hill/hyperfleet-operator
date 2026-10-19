@@ -40,6 +40,8 @@ limitations under the License.
 package api
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -100,6 +102,15 @@ const (
 	labelPartOf    = "app.kubernetes.io/part-of"
 	labelManagedBy = "app.kubernetes.io/managed-by"
 )
+
+// ServiceURL returns the in-cluster base URL of the API's Service, for
+// components elsewhere in the bundle (e.g. Sentinel, HYPERFLEET-1673) that need
+// to call the API without duplicating its resource name or port. The namespace
+// is included explicitly rather than relying on a same-namespace short name, so
+// the URL is correct even if a future component runs in a different namespace.
+func ServiceURL(namespace string) string {
+	return fmt.Sprintf("http://%s.%s.svc:%d", ResourceName, namespace, portHTTP)
+}
 
 // labels returns the common label set stamped on every operand's metadata. Only
 // the instance name varies per CR; every other value is a package constant, so

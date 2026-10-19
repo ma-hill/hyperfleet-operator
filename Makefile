@@ -17,7 +17,9 @@ GOBIN=$(shell go env GOBIN)
 endif
 
 # Container tool (docker or podman)
-CONTAINER_TOOL ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
+# Container tool (docker or podman). command -v yields a full path; strip it so
+# check-container-tool's plain-name comparison passes.
+CONTAINER_TOOL ?= $(notdir $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null))
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -172,8 +174,10 @@ IMG_REGISTRY ?= quay.io/$(QUAY_REPO)
 IMG_NAME ?= hyperfleet-operator
 IMG_TAG ?= $(APP_VERSION)
 OPERATOR_IMG ?= $(IMG_REGISTRY)/$(IMG_NAME):$(IMG_TAG)
-export RELATED_IMAGE_HYPERFLEET_OPERATOR ?= $(OPERATOR_IMG)
-export RELATED_IMAGE_HYPERFLEET_API ?= quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
+export RELATED_IMAGE_HYPERFLEET_OPERATOR ?= quay.io/mahill/hyperfleet-operator:dev-f1d0eca
+export RELATED_IMAGE_HYPERFLEET_API ?= quay.io/mahill/hyperfleet-api:dev-b6d6072
+export RELATED_IMAGE_HYPERFLEET_SENTINEL ?= quay.io/mahill/hyperfleet-sentinel:dev-802750f
+
 
 # Base image for production builds - matches Dockerfile default
 # Override with DEV_BASE_IMAGE for dev builds (see image-dev target)
@@ -227,6 +231,21 @@ image-push: check-container-tool ## Push container image to registry
 
 .PHONY: image-build-push
 image-build-push: image image-push ## Build and push container image to registry
+
+# Same rationale as bundle-multiarch: dev clusters (kind on Apple Silicon) are
+# arm64 and refuse to pull single-platform indexes pushed for the other arch.
+IMAGE_PLATFORMS ?= linux/amd64,linux/arm64
+.PHONY: image-multiarch
+image-multiarch: check-container-tool manifests generate fmt vet ## Build and push a multi-arch operator image (docker/buildx).
+	@echo "Building multi-arch image $(OPERATOR_IMG)..."
+	$(CONTAINER_TOOL) buildx build \
+		--platform $(IMAGE_PLATFORMS) \
+		--provenance=false \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		--build-arg GIT_SHA=$(GIT_SHA) \
+		-t $(OPERATOR_IMG) --push .
+	@echo "Image pushed: $(OPERATOR_IMG)"
 
 .PHONY: check-quay-user
 check-quay-user:
@@ -361,6 +380,24 @@ bundle-push: check-container-tool ## Push bundle image to registry
 	@echo "Pushing image $(BUNDLE_IMG)..."
 	$(CONTAINER_TOOL) push $(BUNDLE_IMG)
 	@echo "Image pushed: $(BUNDLE_IMG)"
+
+# operator-sdk run bundle unpacks/validates the bundle image as linux/amd64,
+# while dev clusters (kind on Apple Silicon) are arm64 — a single-platform
+# bundle image fails on one side or the other. Push both platforms in one go.
+BUNDLE_PLATFORMS ?= linux/amd64,linux/arm64
+.PHONY: bundle-multiarch
+bundle-multiarch: check-container-tool ## Build and push a multi-arch bundle image (docker/buildx; requires registry push).
+	cat config/manifests/dev/patch-images.yaml | envsubst > config/manifests/dev/kustomization.yaml
+	$(CONTAINER_TOOL) buildx build -f bundle.Dockerfile \
+		--platform $(BUNDLE_PLATFORMS) \
+		--provenance=false \
+		--build-arg BUNDLE_VERSION=$(VERSION) \
+		--build-arg CHANNELS=$(CHANNELS) \
+		--build-arg DEFAULT_CHANNEL=$(DEFAULT_CHANNEL) \
+		--build-arg KUSTOMIZE_VARIANT=$(KUSTOMIZE_VARIANT) \
+		--build-arg VALIDATE_RELATED_IMAGES=$(VALIDATE_RELATED_IMAGES) \
+		--build-arg APP_VERSION=$(APP_VERSION) \
+		-t $(BUNDLE_IMG) --push .
 
 # Konflux renders the same template in the run-opm-command pipeline task.
 # Locally the olm.bundle image is swapped for BUNDLE_IMG, the template itself is left untouched.

@@ -1,0 +1,200 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package sentinel
+
+import (
+	"fmt"
+
+	"sigs.k8s.io/yaml"
+)
+
+// This file renders Sentinel's two config files: config.yaml (per-instance
+// values) and broker.yaml (operator-level broker selection). Both are strict
+// subsets of hyperfleet-sentinel's pkg/config — keys the operator does not own
+// are absent so the binary applies its own defaults — and are serialized from
+// typed structs via sigs.k8s.io/yaml, which is byte-stable for a given input
+// (what makes the content-hash rollout meaningful). The RabbitMQ connection
+// URL is never written here; it arrives via env var from a Secret (render.go).
+
+// Fixed settings shared by every instance; none is partner- or
+// operator-configurable in this phase.
+const (
+	pollInterval       = "5s"
+	logLevel           = "info"
+	logFormat          = "json"
+	logOutput          = "stdout"
+	apiClientVersion   = "v1"
+	apiClientTimeout   = "10s"
+	brokerExchangeType = "topic"
+)
+
+// Broker type values, written verbatim into broker.yaml's broker.type field
+// (hyperfleet-sentinel's own vocabulary).
+const (
+	BrokerTypeRabbitMQ     = "rabbitmq"
+	BrokerTypeGooglePubSub = "googlepubsub"
+)
+
+// DefaultBrokerType is used when BrokerTypeEnv is unset.
+const DefaultBrokerType = BrokerTypeRabbitMQ
+
+// BrokerTypeEnv selects the message broker for every Sentinel instance.
+// Operator-level configuration (like RELATED_IMAGE_*), not a CR field: broker
+// type was previously a Helm value and HyperFleetConfig never describes
+// Sentinel internals (HYPERFLEET-1673).
+const BrokerTypeEnv = "BROKER_TYPE"
+
+// BrokerGooglePubSubProjectIDEnv is the GCP project id, required when
+// BrokerTypeEnv is BrokerTypeGooglePubSub.
+const BrokerGooglePubSubProjectIDEnv = "BROKER_GOOGLEPUBSUB_PROJECT_ID"
+
+const configHeader = `# Sentinel configuration — rendered by hyperfleet-operator (HYPERFLEET-1673).
+# Managed resource: manual edits are overwritten on the next reconcile.
+`
+
+const brokerConfigHeader = `# Broker configuration for the hyperfleet-broker library — rendered by
+# hyperfleet-operator (HYPERFLEET-1673). Managed resource: manual edits are
+# overwritten on the next reconcile.
+`
+
+type configInput struct {
+	ResourceType string
+	APIBaseURL   string
+	Namespace    string
+}
+
+type brokerConfigInput struct {
+	BrokerType      string
+	BrokerProjectID string
+}
+
+// sentinelConfig and its nested types are the operator-owned subset of
+// Sentinel's config.yaml; the json tags must match the keys
+// hyperfleet-sentinel's pkg/config deserializes.
+type sentinelConfig struct {
+	Sentinel     sentinelInfo  `json:"sentinel"`
+	DebugConfig  bool          `json:"debug_config"`
+	Log          logConfig     `json:"log"`
+	Clients      clientsConfig `json:"clients"`
+	ResourceType string        `json:"resource_type"`
+	PollInterval string        `json:"poll_interval"`
+}
+
+type sentinelInfo struct {
+	Name string `json:"name"`
+}
+
+type logConfig struct {
+	Level  string `json:"level"`
+	Format string `json:"format"`
+	Output string `json:"output"`
+}
+
+type clientsConfig struct {
+	HyperFleetAPI hyperfleetAPIClientConfig `json:"hyperfleet_api"`
+	Broker        brokerClientConfig        `json:"broker"`
+}
+
+type hyperfleetAPIClientConfig struct {
+	BaseURL string `json:"base_url"`
+	Version string `json:"version"`
+	Timeout string `json:"timeout"`
+}
+
+type brokerClientConfig struct {
+	Topic string `json:"topic"`
+}
+
+// broker.yaml nests everything under one top-level broker key; exactly one of
+// the type-specific blocks is set per render.
+type brokerFileDocument struct {
+	Broker brokerFileConfig `json:"broker"`
+}
+
+type brokerFileConfig struct {
+	Type         string              `json:"type"`
+	RabbitMQ     *rabbitMQConfig     `json:"rabbitmq,omitempty"`
+	GooglePubSub *googlePubSubConfig `json:"googlepubsub,omitempty"`
+}
+
+type rabbitMQConfig struct {
+	ExchangeType string `json:"exchange_type"`
+}
+
+type googlePubSubConfig struct {
+	ProjectID string `json:"project_id"`
+}
+
+// renderConfig serializes config.yaml for one instance. Pure and deterministic.
+func renderConfig(in configInput) (string, error) {
+	cfg := sentinelConfig{
+		Sentinel: sentinelInfo{Name: ResourceName(in.ResourceType)},
+		Log: logConfig{
+			Level:  logLevel,
+			Format: logFormat,
+			Output: logOutput,
+		},
+		Clients: clientsConfig{
+			HyperFleetAPI: hyperfleetAPIClientConfig{
+				BaseURL: in.APIBaseURL,
+				Version: apiClientVersion,
+				Timeout: apiClientTimeout,
+			},
+			Broker: brokerClientConfig{Topic: brokerTopic(in.Namespace, in.ResourceType)},
+		},
+		ResourceType: in.ResourceType,
+		PollInterval: pollInterval,
+	}
+
+	out, err := yaml.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("marshal sentinel config: %w", err)
+	}
+	return configHeader + string(out), nil
+}
+
+// brokerTopic namespaces the topic by the operator's namespace so resource
+// types never collide on the same topic.
+func brokerTopic(namespace, resourceType string) string {
+	return namespace + "-" + resourceType
+}
+
+// renderBrokerConfig serializes broker.yaml. It errors on a broker type that
+// is not one of the BrokerType* constants, or on googlepubsub without a
+// project id, rather than emitting a config Sentinel would reject at startup.
+func renderBrokerConfig(in brokerConfigInput) (string, error) {
+	cfg := brokerFileConfig{}
+	switch in.BrokerType {
+	case BrokerTypeGooglePubSub:
+		if in.BrokerProjectID == "" {
+			return "", fmt.Errorf("%s is required when %s is %q", BrokerGooglePubSubProjectIDEnv, BrokerTypeEnv, BrokerTypeGooglePubSub)
+		}
+		cfg.Type = BrokerTypeGooglePubSub
+		cfg.GooglePubSub = &googlePubSubConfig{ProjectID: in.BrokerProjectID}
+	case BrokerTypeRabbitMQ, "":
+		cfg.Type = BrokerTypeRabbitMQ
+		cfg.RabbitMQ = &rabbitMQConfig{ExchangeType: brokerExchangeType}
+	default:
+		return "", fmt.Errorf("unknown %s %q: must be %q or %q", BrokerTypeEnv, in.BrokerType, BrokerTypeRabbitMQ, BrokerTypeGooglePubSub)
+	}
+
+	out, err := yaml.Marshal(brokerFileDocument{Broker: cfg})
+	if err != nil {
+		return "", fmt.Errorf("marshal sentinel broker config: %w", err)
+	}
+	return brokerConfigHeader + string(out), nil
+}

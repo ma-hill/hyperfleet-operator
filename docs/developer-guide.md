@@ -126,9 +126,23 @@ make run OPERATOR_NAMESPACE=hyperfleet-system
 ```
 
 The namespace must exist and must contain every Secret referenced by the
-cluster-scoped CR. `make run` executes the manager on the host; it does not
-create the namespace, database, credentials, issuer, or certificates. Apply a
-sample only after replacing its example values with reachable dependencies.
+cluster-scoped CR, plus the fixed-name `hyperfleet-broker-credentials` Secret
+Sentinel always reads (see [the `HyperFleetConfig`
+reference](hyperfleetconfig-reference.md#sentinel-broker-credential-operator-prerequisite)).
+`make run` executes the manager on the host; it does not create the namespace,
+database, credentials, issuer, certificates, or broker. Apply a sample only
+after replacing its example values with reachable dependencies.
+
+`BROKER_TYPE` (`rabbitmq`, the default, or `googlepubsub`) and, for Google
+Pub/Sub, `BROKER_GOOGLEPUBSUB_PROJECT_ID` select Sentinel's message broker for
+the whole operator install — operator-level configuration, not a CR field,
+since broker type was previously a Helm value and `HyperFleetConfig` never
+describes Sentinel internals (HYPERFLEET-1673):
+
+```sh
+make run OPERATOR_NAMESPACE=hyperfleet-system BROKER_TYPE=googlepubsub \
+  BROKER_GOOGLEPUBSUB_PROJECT_ID=my-gcp-project
+```
 
 ### Running the manager in a cluster
 
@@ -139,7 +153,8 @@ use the direct-deployment target with explicit operator and API images:
 ```sh
 make deploy \
   RELATED_IMAGE_HYPERFLEET_OPERATOR=<operator-image> \
-  RELATED_IMAGE_HYPERFLEET_API=<api-image>
+  RELATED_IMAGE_HYPERFLEET_API=<api-image> \
+  RELATED_IMAGE_HYPERFLEET_SENTINEL=<sentinel-image>
 kubectl rollout status deployment/hyperfleet-operator-controller-manager \
   -n hyperfleet-system
 ```

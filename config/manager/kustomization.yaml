@@ -17,6 +17,11 @@ patches:
     - op: add
       path: /spec/template/spec/containers/0/env/-
       value:
+        name: RELATED_IMAGE_HYPERFLEET_SENTINEL
+        value: ${RELATED_IMAGE_HYPERFLEET_SENTINEL}
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
         name: RELATED_IMAGE_HYPERFLEET_OPERATOR
         value: ${RELATED_IMAGE_HYPERFLEET_OPERATOR}
     - op: replace

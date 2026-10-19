@@ -43,6 +43,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
 
 // This file holds the two cluster/network-dependent pieces of reconciliation that
@@ -427,10 +428,17 @@ type hashEntry struct {
 // referencedSecretData reads the resourceVersion of each Secret the CR actually
 // references and returns them as hash entries. It reads only what the current
 // spec references: the database Secret always, the TLS Secret when spec.api.tls
-// is set, and the JWKS Secret when spec.api.auth.jwkCertSecretRef is set. A
-// missing Secret is not an error here (see Reconcile); it is recorded as absent.
-// Each entry is tagged with its component.SecretRole* id, which components
-// declare in their RolloutTargets.SecretRoles to fold into their rollout hash.
+// is set, and the JWKS Secret when spec.api.auth.jwkCertSecretRef is set, plus
+// the Sentinel broker credential Secret when r.BrokerType selects RabbitMQ
+// (the default) — Sentinel is shared-tier (always resolved) and this Secret's
+// name is a fixed convention, not a spec reference (see
+// sentinel.BrokerSecretName), so this read is gated on operator-level
+// configuration rather than a CR field. Google Pub/Sub authenticates via
+// Workload Identity, not a Secret, so no broker Secret is read in that mode. A
+// missing Secret is not an error here (see Reconcile); it is recorded as
+// absent. Each entry is tagged with its component.SecretRole* id, which
+// components declare in their RolloutTargets.SecretRoles to fold into their
+// rollout hash.
 //
 // The hash covers resourceVersion, not Secret data. Hashing the actual
 // credential bytes was the original design, but it turns the pod-template
@@ -465,6 +473,14 @@ func (r *HyperFleetConfigReconciler) referencedSecretData(ctx context.Context, c
 		return nil, err
 	}
 	entries = append(entries, dbEntry)
+
+	if r.BrokerType == "" || r.BrokerType == sentinel.BrokerTypeRabbitMQ {
+		brokerEntry, err := getEntry(component.SecretRoleBroker, sentinel.BrokerSecretName)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, brokerEntry)
+	}
 
 	if cr.Spec.API.TLS != nil {
 		tlsEntry, err := getEntry(component.SecretRoleTLS, cr.Spec.API.TLS.SecretRef.Name)

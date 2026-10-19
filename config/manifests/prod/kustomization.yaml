@@ -7,8 +7,17 @@ patches:
       value:
         name: RELATED_IMAGE_HYPERFLEET_API
         value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api@sha256:7a86a917a625dbb8fc7644e616a5ff2405dac9583705bd2091a0d251519d1041
+    # Stopgap digest: HYPERFLEET-1674 wires the durable digest-pinned relatedImages
+    # entry and the tenant-side nudge that keeps it current. Until that lands,
+    # this pins the current redhat-services-prod :latest digest per 1673's own
+    # technical notes.
     - op: replace
       path: /spec/template/spec/containers/0/env/2
+      value:
+        name: RELATED_IMAGE_HYPERFLEET_SENTINEL
+        value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel@sha256:d4d848e306d204f764b45c75660a05fc9a9cf451c3972d1d386a262893f83600
+    - op: replace
+      path: /spec/template/spec/containers/0/env/3
       value:
         name: RELATED_IMAGE_HYPERFLEET_OPERATOR
         value: quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:253e6ac04e98947f4db410816bcd40c4fb75693b023f4b98469d2160970fbcc7

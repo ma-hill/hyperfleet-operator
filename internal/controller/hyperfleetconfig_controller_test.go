@@ -26,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,8 +36,17 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	sentinelcomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
+
+// sentinelResourceTypes mirrors internal/bundle's cloudCAPIEntities plurals —
+// the cloud-capi bundle these specs use resolves to one Sentinel instance per
+// entry. Kept in sync manually since cloudCAPIEntities is unexported; a drift
+// here only weakens these specs' operand coverage, it cannot mask a real bug
+// (TestResolveWiresSharedTierSentinelComponents in internal/bundle is the
+// source-of-truth check that the real list matches).
+var sentinelResourceTypes = []string{"clusters", "nodepools", "channels", "versions", "wifconfigs"}
 
 // Reconciler behavior specs (HYPERFLEET-1407). These run against envtest, which
 // is apiserver + etcd only: there is NO garbage-collection controller and NO
@@ -52,13 +62,24 @@ import (
 // NotFound is a valid "already clean" outcome; any other error fails the spec.
 func deleteOperands(ctx context.Context, namespace string) {
 	GinkgoHelper()
-	operands := []client.Object{
+	operands := make([]client.Object, 0, 6+5*len(sentinelResourceTypes))
+	operands = append(operands,
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ResourceName, Namespace: namespace}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ResourceName, Namespace: namespace}},
 		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ResourceName, Namespace: namespace}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ConfigMapName, Namespace: namespace}},
 		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ResourceName, Namespace: namespace}},
 		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ResourceName, Namespace: namespace}},
+	)
+	for _, rt := range sentinelResourceTypes {
+		name := sentinelcomponent.ResourceName(rt)
+		operands = append(operands,
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}},
+			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}},
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: sentinelcomponent.ConfigMapName(rt), Namespace: namespace}},
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: sentinelcomponent.BrokerConfigMapName(rt), Namespace: namespace}},
+			&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}},
+		)
 	}
 	for _, o := range operands {
 		if err := k8sClient.Delete(ctx, o); err != nil && !errors.IsNotFound(err) {
@@ -71,6 +92,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 	const (
 		operatorNamespace = "hyperfleet-system"
 		apiImage          = "example.com/hyperfleet-api:test"
+		sentinelImage     = "example.com/hyperfleet-sentinel:test"
 	)
 
 	ctx := context.Background()
@@ -110,6 +132,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			Scheme:            k8sClient.Scheme(),
 			OperatorNamespace: operatorNamespace,
 			APIImage:          apiImage,
+			SentinelImage:     sentinelImage,
 		}
 	})
 
@@ -169,6 +192,33 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		rb := &rbacv1.RoleBinding{}
 		Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), rb)).To(Succeed())
 		expectOwnedBy(rb, cr)
+
+		By("verifying a Sentinel instance's operand set exists and is owned by the CR")
+		sentinelName := sentinelcomponent.ResourceName("clusters")
+		sdep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, operandKey(sentinelName), sdep)).To(Succeed())
+		expectOwnedBy(sdep, cr)
+		Expect(sdep.Spec.Template.Spec.Containers).To(HaveLen(1))
+		Expect(sdep.Spec.Template.Spec.Containers[0].Image).To(Equal(sentinelImage))
+
+		ssa := &corev1.ServiceAccount{}
+		Expect(k8sClient.Get(ctx, operandKey(sentinelName), ssa)).To(Succeed())
+		expectOwnedBy(ssa, cr)
+
+		scm := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, operandKey(sentinelcomponent.ConfigMapName("clusters")), scm)).To(Succeed())
+		expectOwnedBy(scm, cr)
+		Expect(scm.Data).To(HaveKey("config.yaml"))
+
+		sbcm := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, operandKey(sentinelcomponent.BrokerConfigMapName("clusters")), sbcm)).To(Succeed())
+		expectOwnedBy(sbcm, cr)
+		Expect(sbcm.Data).To(HaveKey("broker.yaml"))
+
+		snp := &networkingv1.NetworkPolicy{}
+		Expect(k8sClient.Get(ctx, operandKey(sentinelName), snp)).To(Succeed())
+		expectOwnedBy(snp, cr)
+		Expect(snp.Spec.PolicyTypes).To(ConsistOf(networkingv1.PolicyTypeIngress))
 	})
 
 	It("recreates an operand after out-of-band deletion (drift self-heals)", func() {
@@ -324,6 +374,21 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		return cr
 	}
 
+	// allDeploymentNames lists every component's Deployment: the API plus one
+	// Sentinel instance per resource type. The status rollup ANDs/ORs across
+	// every component (see aggregateStatus), so a scenario that wants the
+	// overall Available/Progressing to reach a specific state must patch all of
+	// them, not just the API's — otherwise an untouched Sentinel instance (never
+	// marked ready) permanently pins Available=False regardless of the API.
+	allDeploymentNames := func() []string {
+		names := make([]string, 0, 1+len(sentinelResourceTypes))
+		names = append(names, apicomponent.ResourceName)
+		for _, rt := range sentinelResourceTypes {
+			names = append(names, sentinelcomponent.ResourceName(rt))
+		}
+		return names
+	}
+
 	// patchDeploymentStatus fetches the API Deployment and overwrites its status
 	// subresource, simulating what the built-in Deployment controller would write.
 	patchDeploymentStatus := func(mutate func(*appsv1.Deployment)) {
@@ -334,10 +399,24 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(k8sClient.Status().Update(ctx, dep)).To(Succeed())
 	}
 
-	// createReferencedSecrets creates every Secret the fixture CR (validHyperFleetConfig)
-	// references — the database Secret and the pinned JWKS Secret — so scenarios
-	// about Deployment/rollout health are not incidentally also Degraded on a
-	// missing Secret (that is its own dedicated scenario below).
+	// patchAllDeploymentsStatus applies mutate to every component's Deployment
+	// (see allDeploymentNames), so a scenario about the rolled-up status can put
+	// every component into the same simulated state.
+	patchAllDeploymentsStatus := func(mutate func(*appsv1.Deployment)) {
+		GinkgoHelper()
+		for _, name := range allDeploymentNames() {
+			dep := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, operandKey(name), dep)).To(Succeed())
+			mutate(dep)
+			Expect(k8sClient.Status().Update(ctx, dep)).To(Succeed())
+		}
+	}
+
+	// createReferencedSecrets creates every Secret the fixture CR
+	// (validHyperFleetConfig) references, plus Sentinel's fixed-name broker
+	// credential Secret (referenced unconditionally, not via any CR field) — so
+	// scenarios about Deployment/rollout health are not incidentally also
+	// Degraded on a missing Secret (that is its own dedicated scenario below).
 	createReferencedSecrets := func() {
 		GinkgoHelper()
 		dbSecret := &corev1.Secret{
@@ -354,7 +433,11 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: testJWKSSecretName, Namespace: operatorNamespace},
 			Data:       map[string][]byte{apicomponent.SecretKeyJWKS: []byte(`{"keys":[]}`)},
 		}
-		for _, s := range []*corev1.Secret{dbSecret, jwksSecret} {
+		brokerSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: sentinelcomponent.BrokerSecretName, Namespace: operatorNamespace},
+			Data:       map[string][]byte{sentinelcomponent.BrokerSecretKey: []byte("amqp://guest:guest@rabbitmq.hyperfleet-system.svc.cluster.local:5672/hyperfleet")},
+		}
+		for _, s := range []*corev1.Secret{dbSecret, jwksSecret, brokerSecret} {
 			Expect(k8sClient.Create(ctx, s)).To(Succeed())
 			DeferCleanup(func(ctx context.Context, obj client.Object) {
 				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, obj))).To(Succeed())
@@ -382,8 +465,8 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		By("reconciling to create the operands")
 		doReconcile()
 
-		By("marking the Deployment fully ready, as the real Deployment controller would")
-		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+		By("marking every component's Deployment fully ready, as the real Deployment controller would")
+		patchAllDeploymentsStatus(func(dep *appsv1.Deployment) {
 			dep.Status.Replicas = 1
 			dep.Status.AvailableReplicas = 1
 			dep.Status.ReadyReplicas = 1
@@ -404,8 +487,8 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 	It("reports Progressing=True while a rollout to a new generation has not completed", func() {
 		doReconcile()
 
-		By("marking the Deployment healthy at its current generation")
-		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+		By("marking every component's Deployment healthy at its current generation")
+		patchAllDeploymentsStatus(func(dep *appsv1.Deployment) {
 			dep.Status.Replicas = 1
 			dep.Status.AvailableReplicas = 1
 			dep.Status.ReadyReplicas = 1
@@ -415,7 +498,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		doReconcile()
 		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionFalse))
 
-		By("simulating a lagging rollout: the Deployment has not caught up to its latest generation")
+		By("simulating a lagging rollout: the API Deployment has not caught up to its latest generation")
 		patchDeploymentStatus(func(dep *appsv1.Deployment) {
 			dep.Status.ObservedGeneration = dep.Generation - 1
 		})
@@ -428,7 +511,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 
 	It("reports Available=False when the operand Deployment goes down after having been healthy", func() {
 		doReconcile()
-		patchDeploymentStatus(func(dep *appsv1.Deployment) {
+		patchAllDeploymentsStatus(func(dep *appsv1.Deployment) {
 			dep.Status.Replicas = 1
 			dep.Status.AvailableReplicas = 1
 			dep.Status.ReadyReplicas = 1
@@ -438,7 +521,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		doReconcile()
 		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
 
-		By("simulating the operand going down")
+		By("simulating the API operand going down")
 		patchDeploymentStatus(func(dep *appsv1.Deployment) {
 			dep.Status.AvailableReplicas = 0
 			dep.Status.ReadyReplicas = 0

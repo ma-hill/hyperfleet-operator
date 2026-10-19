@@ -43,6 +43,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/controller"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/servicemonitor"
@@ -268,12 +269,56 @@ func main() {
 			"image", apiImage)
 	}
 
+	// RELATED_IMAGE_HYPERFLEET_SENTINEL follows the same production digest-pin
+	// convention as RELATED_IMAGE_HYPERFLEET_API above — except that Sentinel
+	// has no compiled-in default image: the production path has no versioned
+	// release yet (HYPERFLEET-1674), so an unset value makes every reconcile
+	// fail at Sentinel rendering (Degraded) rather than silently deploy a dev
+	// tag. Startup still continues so the rest of the operator works.
+	sentinelImage := os.Getenv(sentinel.RelatedImageEnv)
+	switch {
+	case sentinelImage == "":
+		setupLog.Error(nil, "RELATED_IMAGE_HYPERFLEET_SENTINEL not set; Sentinel cannot render "+
+			"until it is provided (reconciles will degrade)")
+	case !strings.Contains(sentinelImage, "@sha256:"):
+		setupLog.Info("RELATED_IMAGE_HYPERFLEET_SENTINEL is not digest-pinned; pin the Sentinel image by digest "+
+			"for production", "image", sentinelImage)
+	}
+
+	// BROKER_TYPE is operator-level configuration (like the RELATED_IMAGE_*
+	// vars above): it was previously a Helm value, and HyperFleetConfig has no
+	// field for it (HYPERFLEET-1673 scope explicitly excludes exposing Sentinel
+	// internals on the CR). An unrecognized value falls back to the default
+	// rather than failing startup, since a typo here should not take down the
+	// whole operator — Sentinel's own Degraded/Progressing signals surface the
+	// resulting broker config error per-reconcile instead.
+	brokerType := os.Getenv(sentinel.BrokerTypeEnv)
+	switch brokerType {
+	case "":
+		setupLog.Info("BROKER_TYPE not set; falling back to the default broker type",
+			"default", sentinel.DefaultBrokerType)
+	case sentinel.BrokerTypeRabbitMQ, sentinel.BrokerTypeGooglePubSub:
+	default:
+		validTypes := []string{sentinel.BrokerTypeRabbitMQ, sentinel.BrokerTypeGooglePubSub}
+		setupLog.Error(nil, "BROKER_TYPE is not a recognized broker type; falling back to the default",
+			"value", brokerType, "default", sentinel.DefaultBrokerType, "valid", validTypes)
+		brokerType = ""
+	}
+	brokerProjectID := os.Getenv(sentinel.BrokerGooglePubSubProjectIDEnv)
+	if brokerType == sentinel.BrokerTypeGooglePubSub && brokerProjectID == "" {
+		setupLog.Error(nil, "BROKER_GOOGLEPUBSUB_PROJECT_ID not set; Sentinel's broker config will fail to render",
+			"brokerType", brokerType)
+	}
+
 	if err := (&controller.HyperFleetConfigReconciler{
 		Client:            mgr.GetClient(),
 		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		OperatorNamespace: operatorNamespace,
 		APIImage:          apiImage,
+		SentinelImage:     sentinelImage,
+		BrokerType:        brokerType,
+		BrokerProjectID:   brokerProjectID,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HyperFleetConfig")
 		os.Exit(1)

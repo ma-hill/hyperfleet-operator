@@ -66,6 +66,40 @@ implementation layout. Any new field requires an API compatibility review,
 validation/defaulting tests, regenerated CRDs, sample and reference updates,
 and an explanation of why an operator-internal default is insufficient.
 
+**One component, many instances.** A component need not resolve to exactly one
+operand set. Sentinel (HYPERFLEET-1673) watches one resource type per process,
+so the bundle definition constructs one `*sentinel.Component` per registered
+entity rather than teaching the component (or the `bundle.Component`
+contract) to fan out internally: each instance independently satisfies the
+existing single-Deployment/single-ConfigMap `Rollout()` contract, parameterizes
+every rendered name by its instance key, and reports its own `Name()` (suffixed
+with that key) so logs and the `operand` metric label stay attributable to one
+instance. Prefer this over widening `component.RolloutTargets` to a slice
+whenever a component's "many instances" are otherwise independent — it keeps
+the contract, and the controller's rollout/apply loop, unchanged.
+
+**Operator-derived (non-CR) Secrets.** Not every Secret a component consumes
+comes from a `spec` field — Sentinel's broker credential is operator-internal
+and has no CR reference at all, so it is a fixed, documented Secret name
+(`sentinel.BrokerSecretName`) the controller reads in `referencedSecretData`,
+tagged with its own `component.SecretRole*` constant like any other referenced
+Secret. Document fixed-name Secret prerequisites in [the `HyperFleetConfig`
+reference](hyperfleetconfig-reference.md) alongside the CR-referenced ones,
+even though they have no corresponding spec field.
+
+**Operator-level, non-image configuration.** A value that was previously a
+Helm value, has no partner-facing meaning, and cannot become a CR field
+(step 1) still needs *some* input mechanism. Sentinel's broker type
+(`rabbitmq`/`googlepubsub`) is operator-level configuration read once at
+startup via a plain environment variable (`sentinel.BrokerTypeEnv`, threaded
+through `cmd/main.go` → the reconciler → `bundle.Config` → every affected
+component's `Options`) — the same shape as the `RELATED_IMAGE_*` convention in
+step 8, but for a non-image value. Validate it in `cmd/main.go` with a warning
+and a safe default rather than failing startup on a typo; let the component's
+own `Render()` return an error (surfacing as a reconcile failure) for a
+combination that is structurally invalid, such as a broker type that needs a
+project id which was never set.
+
 ### 2. Create the package and constructor
 
 Add a focused package under `internal/component/<name>`. Follow the API

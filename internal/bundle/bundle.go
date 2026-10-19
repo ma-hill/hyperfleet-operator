@@ -30,6 +30,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
 
 // Component is the contract every component satisfies. It is deliberately tiny —
@@ -59,6 +60,9 @@ type Component interface {
 type Config struct {
 	// APIImage is the image for the API component (empty → its compiled-in default).
 	APIImage string
+	// SentinelImage is the image for every Sentinel instance (empty → its
+	// compiled-in default).
+	SentinelImage string
 	// Namespace is the operator's own namespace, where operands are created.
 	Namespace string
 	// ResolvedJWKSURL is the JWKS URL the controller derived via OIDC discovery.
@@ -66,6 +70,12 @@ type Config struct {
 	// is enabled and the CR pins neither a JWKS URL nor a JWKS Secret. Empty
 	// otherwise (the component reads the CR field/Secret path directly).
 	ResolvedJWKSURL string
+	// BrokerType selects the message broker every Sentinel instance uses
+	// (sentinel.BrokerType*). Empty falls back to sentinel.DefaultBrokerType.
+	BrokerType string
+	// BrokerProjectID is the GCP project id, required when BrokerType is
+	// sentinel.BrokerTypeGooglePubSub.
+	BrokerProjectID string
 }
 
 // cloudCAPIEntities is the entity registration set for the cloud-capi bundle.
@@ -127,20 +137,46 @@ func entitiesForBundle(b hyperfleetv1alpha1.BundleType) ([]api.EntityDescriptor,
 	}
 }
 
-// sharedTier lists the components present in every bundle regardless of flavor.
-// In phase 1 this is exactly [API], so every bundle resolves to [API]. It takes
-// the bundle so the API component can be given the bundle-specific entity set.
+// entityPlurals extracts the plural resource-type name from each entity, the
+// single value Sentinel needs to watch one (HYPERFLEET-1673) — unlike the API
+// component, Sentinel has no use for the rest of EntityDescriptor's schema
+// metadata.
+func entityPlurals(entities []api.EntityDescriptor) []string {
+	plurals := make([]string, len(entities))
+	for i, e := range entities {
+		plurals[i] = e.Plural
+	}
+	return plurals
+}
+
+// sharedTier lists the components present in every bundle regardless of
+// flavor: the API, plus one Sentinel instance per registered entity
+// (HYPERFLEET-1673 — Sentinel is the second bundle component). It takes the
+// bundle so both can be given the bundle-specific entity set.
 func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error) {
 	entities, err := entitiesForBundle(b)
 	if err != nil {
 		return nil, err
 	}
-	return []Component{
+
+	components := []Component{
 		api.New(cfg.APIImage, cfg.Namespace, api.Options{
 			Entities:        entities,
 			ResolvedJWKSURL: cfg.ResolvedJWKSURL,
 		}),
-	}, nil
+	}
+
+	apiBaseURL := api.ServiceURL(cfg.Namespace)
+	for _, resourceType := range entityPlurals(entities) {
+		components = append(components, sentinel.New(cfg.SentinelImage, cfg.Namespace, sentinel.Options{
+			ResourceType:    resourceType,
+			APIBaseURL:      apiBaseURL,
+			BrokerType:      cfg.BrokerType,
+			BrokerProjectID: cfg.BrokerProjectID,
+		}))
+	}
+
+	return components, nil
 }
 
 // bundleSpecific returns the components unique to a bundle beyond the shared

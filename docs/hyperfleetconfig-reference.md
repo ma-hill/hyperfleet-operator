@@ -11,6 +11,7 @@ The generated CRD remains the admission-time source of truth.
 - [Example](#example)
 - [Specification](#specification)
   - [Referenced Secret contracts](#referenced-secret-contracts)
+  - [Sentinel broker credential (operator prerequisite)](#sentinel-broker-credential-operator-prerequisite)
   - [Authentication and JWKS selection](#authentication-and-jwks-selection)
   - [Current sizing limitation](#current-sizing-limitation)
 - [Status reference](#status-reference)
@@ -97,6 +98,30 @@ Creating, updating, or deleting a referenced Secret triggers a later reconcile.
 The operator rolls the API pods when a referenced Secret changes so they use
 current credential or certificate material, without copying Secret values into
 rendered configuration.
+
+### Sentinel broker credential (operator prerequisite)
+
+Unlike the Secrets above, Sentinel's message-broker credential is not named by
+any `spec` field — `HyperFleetConfig` never describes Sentinel internals
+(HYPERFLEET-1673). Which broker Sentinel uses is operator-level configuration
+(the `BROKER_TYPE` environment variable on the manager, previously a Helm
+value — see the [developer guide](developer-guide.md)), not a CR field either.
+When `BROKER_TYPE` is `rabbitmq` (the default), the operator looks for a
+fixed-name Secret in its own namespace:
+
+| Secret name | Required keys | Notes |
+|---|---|---|
+| `hyperfleet-broker-credentials` | `BROKER_RABBITMQ_URL` | Must be provisioned out-of-band before installing Sentinel; referenced by every Sentinel instance. |
+
+A missing `hyperfleet-broker-credentials` Secret produces the same
+`Degraded=True/ReferencedSecretMissing` signal as a missing database, TLS, or
+JWKS Secret, and the operator rolls Sentinel's pods when it changes, using the
+same content-hash rollout mechanism.
+
+When `BROKER_TYPE` is `googlepubsub`, no Secret is read — authentication is via
+Workload Identity Federation on the Sentinel ServiceAccount — but
+`BROKER_GOOGLEPUBSUB_PROJECT_ID` must be set, or Sentinel's broker config fails
+to render.
 
 ### Authentication and JWKS selection
 

@@ -119,7 +119,8 @@ hyperfleet_operator_reconcile_errors_total{component="operator",version="v1.2.3"
 ### Operand Metrics
 
 These metrics track the operands the operator manages (one per component in the
-resolved bundle, e.g. `api`).
+resolved bundle, e.g. `api`, or `sentinel-clusters` for a Sentinel instance
+watching the `clusters` resource type — HYPERFLEET-1673).
 
 #### `hyperfleet_operator_operand_ready`
 
@@ -135,7 +136,7 @@ each reconcile.
 |-------|-------------|----------------|
 | `component` | Component name (const) | `operator` |
 | `version` | Application version (const) | `v1.2.3` |
-| `operand` | Operand component name | `api` |
+| `operand` | Operand component name | `api`, `sentinel-clusters` |
 
 **Example output:**
 
@@ -157,7 +158,7 @@ pod template against the desired one via a template-hash annotation.
 |-------|-------------|----------------|
 | `component` | Component name (const) | `operator` |
 | `version` | Application version (const) | `v1.2.3` |
-| `operand` | Operand component name | `api` |
+| `operand` | Operand component name | `api`, `sentinel-clusters` |
 | `trigger` | What caused the rollout | `create`, `image`, `config` |
 
 **Trigger values:**

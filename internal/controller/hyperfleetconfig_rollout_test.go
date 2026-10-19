@@ -33,6 +33,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	sentinelcomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
 
 // These are plain unit tests (no envtest): OIDC discovery, the content-hash, and
@@ -606,6 +607,16 @@ func TestAPIRolloutTargetsDeclareEveryReferencedSecretRole(t *testing.T) {
 	} {
 		g.Expect(targets.SecretRoles).To(ContainElement(role))
 	}
+}
+
+func TestSentinelRolloutTargetsDeclareEveryReferencedSecretRole(t *testing.T) {
+	g := NewWithT(t)
+
+	// Mirrors TestAPIRolloutTargetsDeclareEveryReferencedSecretRole: if a
+	// Sentinel instance ever stops declaring SecretRoleBroker, the broker
+	// credential's rotations silently stop rolling its pods.
+	targets := sentinelcomponent.New("img", operatorNamespace, sentinelcomponent.Options{ResourceType: "clusters"}).Rollout()
+	g.Expect(targets.SecretRoles).To(ContainElement(component.SecretRoleBroker))
 }
 
 func TestMapSecretToConfig(t *testing.T) {
