@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 )
 
@@ -452,9 +453,15 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 		return objs
 	}
 
+	apiTarget := component.RolloutTarget{
+		ConfigMapName:  apicomponent.ConfigMapName,
+		ConfigFileKey:  apicomponent.ConfigFileKey,
+		DeploymentName: apicomponent.ResourceName,
+	}
+
 	entries := []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h1")}}
 	objs := render()
-	stampConfigHash(objs, entries)
+	stampConfigHash(objs, apiTarget, entries)
 
 	depOf := func(objs []client.Object) *appsv1.Deployment {
 		for _, o := range objs {
@@ -472,12 +479,12 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 
 	// Re-stamping the same render with the same entries yields the same hash.
 	objs2 := render()
-	stampConfigHash(objs2, entries)
+	stampConfigHash(objs2, apiTarget, entries)
 	g.Expect(depOf(objs2).Spec.Template.Annotations[configHashAnnotation]).To(Equal(got))
 
 	// A rotated secret value changes the stamped hash.
 	objs3 := render()
-	stampConfigHash(objs3, []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h2")}})
+	stampConfigHash(objs3, apiTarget, []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h2")}})
 	g.Expect(depOf(objs3).Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(got))
 }
 

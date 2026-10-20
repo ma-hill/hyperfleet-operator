@@ -23,6 +23,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
 
 func TestEntitiesForBundleCloudCAPI(t *testing.T) {
@@ -64,26 +65,40 @@ func TestEntitiesForBundleUnknownErrors(t *testing.T) {
 	g.Expect(ents).To(BeNil())
 }
 
-func TestResolveWiresSharedTierAPIComponent(t *testing.T) {
+func TestResolveWiresSharedTierComponents(t *testing.T) {
 	g := NewWithT(t)
 
 	const jwks = "https://issuer.example.com/keys"
 	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
 		APIImage:        "example.com/api:test",
+		SentinelImage:   "example.com/sentinel:test",
 		Namespace:       "hyperfleet-system",
 		ResolvedJWKSURL: jwks,
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	// Phase 1: every bundle resolves to exactly [API].
-	g.Expect(comps).To(HaveLen(1))
+	// 1 API + 5 sentinel instances (one per cloud-capi entity).
+	g.Expect(comps).To(HaveLen(1 + len(cloudCAPIEntities)))
 
-	comp, ok := comps[0].(*api.Component)
+	apiComp, ok := comps[0].(*api.Component)
 	g.Expect(ok).To(BeTrue())
-	g.Expect(comp.Image).To(Equal("example.com/api:test"))
-	g.Expect(comp.Namespace).To(Equal("hyperfleet-system"))
-	g.Expect(comp.ResolvedJWKSURL).To(Equal(jwks))
-	g.Expect(comp.Entities).To(Equal(cloudCAPIEntities))
+	g.Expect(apiComp.Image).To(Equal("example.com/api:test"))
+	g.Expect(apiComp.Namespace).To(Equal("hyperfleet-system"))
+	g.Expect(apiComp.ResolvedJWKSURL).To(Equal(jwks))
+	g.Expect(apiComp.Entities).To(Equal(cloudCAPIEntities))
+
+	expectedTypes := make([]string, len(cloudCAPIEntities))
+	for i, e := range cloudCAPIEntities {
+		expectedTypes[i] = e.Plural
+	}
+	for i, rt := range expectedTypes {
+		sc, ok := comps[1+i].(*sentinel.Component)
+		g.Expect(ok).To(BeTrue(), "comps[%d] should be a sentinel.Component", 1+i)
+		g.Expect(sc.ResourceType).To(Equal(rt))
+		g.Expect(sc.Image).To(Equal("example.com/sentinel:test"))
+		g.Expect(sc.Namespace).To(Equal("hyperfleet-system"))
+		g.Expect(sc.APIBaseURL).To(Equal(api.ServiceURL("hyperfleet-system")))
+	}
 }
 
 func TestResolveOnPremAgentErrors(t *testing.T) {

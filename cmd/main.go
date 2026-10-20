@@ -43,6 +43,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/controller"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/servicemonitor"
@@ -268,12 +269,27 @@ func main() {
 			"image", apiImage)
 	}
 
+	// RELATED_IMAGE_HYPERFLEET_SENTINEL should be digest-pinned in production; OLM pins
+	// it at bundle-build time via the relatedImages convention. Warn — but do not
+	// fail — when it is unset or uses a mutable tag, so `make run` and tag-based
+	// deploys keep working while the risk is surfaced in the logs.
+	sentinelImage := os.Getenv(sentinel.RelatedImageEnv)
+	switch {
+	case sentinelImage == "":
+		setupLog.Error(nil, "RELATED_IMAGE_HYPERFLEET_SENTINEL not set")
+		os.Exit(1)
+	case !strings.Contains(sentinelImage, "@sha256:"):
+		setupLog.Error(nil, "RELATED_IMAGE_HYPERFLEET_SENTINEL is not digest-pinned; pin the Sentinel image by digest for production", "image", sentinelImage)
+		os.Exit(1)
+	}
+
 	if err := (&controller.HyperFleetConfigReconciler{
 		Client:            mgr.GetClient(),
 		APIReader:         mgr.GetAPIReader(),
 		Scheme:            mgr.GetScheme(),
 		OperatorNamespace: operatorNamespace,
 		APIImage:          apiImage,
+		SentinelImage:     sentinelImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HyperFleetConfig")
 		os.Exit(1)

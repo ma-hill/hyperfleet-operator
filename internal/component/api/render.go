@@ -40,6 +40,7 @@ limitations under the License.
 package api
 
 import (
+	"fmt"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -100,6 +101,10 @@ const (
 	labelPartOf    = "app.kubernetes.io/part-of"
 	labelManagedBy = "app.kubernetes.io/managed-by"
 )
+
+func ServiceURL(namespace string) string {
+	return fmt.Sprintf("http://%s.%s.svc:%d", ResourceName, namespace, portHTTP)
+}
 
 // labels returns the common label set stamped on every operand's metadata. Only
 // the instance name varies per CR; every other value is a package constant, so

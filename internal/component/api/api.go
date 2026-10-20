@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 )
 
 // RelatedImageEnv is the release image override supplied by the bundle CSV.
@@ -79,6 +80,16 @@ func New(image, namespace string, opts Options) *Component {
 // Name identifies the component in logs and the app.kubernetes.io/component label.
 func (c *Component) Name() string {
 	return ComponentName
+}
+
+// Rollout returns the ConfigMap and Deployment names the controller uses to
+// stamp a config-hash annotation for rolling pods on config/secret changes.
+func (c *Component) Rollout() component.RolloutTarget {
+	return component.RolloutTarget{
+		ConfigMapName:  ConfigMapName,
+		ConfigFileKey:  ConfigFileKey,
+		DeploymentName: ResourceName,
+	}
 }
 
 // Render returns the full desired-state operand set for the API, in a

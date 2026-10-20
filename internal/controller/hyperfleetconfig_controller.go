@@ -60,6 +60,9 @@ type HyperFleetConfigReconciler struct {
 	// RELATED_IMAGE_HYPERFLEET_API in main.go; empty falls back to the API
 	// component's compiled-in default.
 	APIImage string
+	// SentinelImage is the container image for the Sentinel operand. Sourced from
+	// RELATED_IMAGE_HYPERFLEET_SENTINEL in main.go.
+	SentinelImage string
 	// HTTPClient performs OIDC discovery requests. Nil falls back to a lazily-built,
 	// reused hardened default client (see discoverJWKSURL/discoveryClientOnce);
 	// tests inject one pointed at an httptest server, bypassing that default
@@ -184,6 +187,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	components, err := bundle.Resolve(cr.Spec.Bundle, bundle.Config{
 		APIImage:        r.APIImage,
+		SentinelImage:   r.SentinelImage,
 		Namespace:       r.OperatorNamespace,
 		ResolvedJWKSURL: jwksURL,
 	})
@@ -199,12 +203,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			metrics.IncReconcileError("render")
 			return ctrl.Result{}, fmt.Errorf("render component %q: %w", component.Name(), err)
 		}
-		// Stamp the config-hash on the component's Deployment pod template so a
-		// config or secret-value change rolls the pods. For components without a
-		// ConfigMap+Deployment pair (none today besides the API) this is a no-op
-		// beyond the returned hash. The hash is also folded into the applied-config
-		// metric below, so it reflects secret/resolved-value changes too.
-		componentConfigHashes = append(componentConfigHashes, stampConfigHash(objs, secretData))
+		componentConfigHashes = append(componentConfigHashes, stampConfigHash(objs, component.Rollout(), secretData))
 		// Detect an imminent operand rollout before applying, while the live object
 		// still reflects the previous desired state. Runs after stampConfigHash so
 		// the desired template it hashes is the final one. The rollout counter

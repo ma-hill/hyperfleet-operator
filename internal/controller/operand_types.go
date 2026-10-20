@@ -19,6 +19,7 @@ package controller
 import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -35,5 +36,6 @@ func NamespacedOperandTypes() []client.Object {
 		&corev1.ConfigMap{},
 		&rbacv1.Role{},
 		&rbacv1.RoleBinding{},
+		&networkingv1.NetworkPolicy{},
 	}
 }

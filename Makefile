@@ -174,6 +174,7 @@ IMG_TAG ?= $(APP_VERSION)
 OPERATOR_IMG ?= $(IMG_REGISTRY)/$(IMG_NAME):$(IMG_TAG)
 export RELATED_IMAGE_HYPERFLEET_OPERATOR ?= $(OPERATOR_IMG)
 export RELATED_IMAGE_HYPERFLEET_API ?= quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
+export RELATED_IMAGE_HYPERFLEET_SENTINEL ?= quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel:latest
 
 # Base image for production builds - matches Dockerfile default
 # Override with DEV_BASE_IMAGE for dev builds (see image-dev target)

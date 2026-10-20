@@ -41,7 +41,9 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
+	sentinelcomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
 
 // This file holds the two cluster/network-dependent pieces of reconciliation that
@@ -423,12 +425,12 @@ type hashEntry struct {
 	value   []byte
 }
 
-// referencedSecretData reads the resourceVersion of each Secret the API
-// actually consumes and returns them as hash entries. It reads only what the
-// current spec references: the database Secret always, the TLS Secret when
-// spec.api.tls is set, and the JWKS Secret when spec.api.auth.jwkCertSecretRef
-// is set. A missing Secret is not an error here (see Reconcile); it is
-// recorded as absent.
+// referencedSecretData reads the resourceVersion of each Secret any component
+// actually consumes and returns them as hash entries. It reads: the database
+// Secret always, the TLS Secret when spec.api.tls is set, the JWKS Secret when
+// spec.api.auth.jwkCertSecretRef is set, and the broker Secret unconditionally
+// (Sentinel is always present in the shared tier). A missing Secret is not an
+// error here (see Reconcile); it is recorded as absent.
 //
 // The hash covers resourceVersion, not Secret data. Hashing the actual
 // credential bytes was the original design, but it turns the pod-template
@@ -480,6 +482,12 @@ func (r *HyperFleetConfigReconciler) referencedSecretData(ctx context.Context, c
 		entries = append(entries, jwksEntry)
 	}
 
+	brokerEntry, err := getEntry("broker", sentinelcomponent.BrokerSecretName)
+	if err != nil {
+		return nil, err
+	}
+	entries = append(entries, brokerEntry)
+
 	return entries, nil
 }
 
@@ -519,18 +527,15 @@ func computeConfigHash(configYAML string, entries []hashEntry) string {
 
 // stampConfigHash computes the rollout hash from the component's rendered
 // ConfigMap plus the referenced-secret entries and writes it onto the component's
-// Deployment pod-template annotations. It matches operands by the API component's
-// well-known names, so for a component without that ConfigMap+Deployment pair it
-// is a no-op beyond returning the (ConfigMap-less) hash. Mutating the Deployment
-// in place is safe: the object was just rendered and has not yet been applied.
-// The returned hash is also folded into the applied-config metric (see
-// hashConfig) so a Secret rotation or resolved-value drift shows up there too,
-// not just as a pod-template rollout.
-func stampConfigHash(objs []client.Object, entries []hashEntry) string {
+// Deployment pod-template annotations. It uses the component's RolloutTarget to
+// find the right ConfigMap and Deployment by name, so it works for any component
+// (HYPERFLEET-1673). Mutating the Deployment in place is safe: the object was
+// just rendered and has not yet been applied.
+func stampConfigHash(objs []client.Object, target component.RolloutTarget, entries []hashEntry) string {
 	var configYAML string
 	for _, o := range objs {
-		if cm, ok := o.(*corev1.ConfigMap); ok && cm.Name == apicomponent.ConfigMapName {
-			configYAML = cm.Data[apicomponent.ConfigFileKey]
+		if cm, ok := o.(*corev1.ConfigMap); ok && cm.Name == target.ConfigMapName {
+			configYAML = cm.Data[target.ConfigFileKey]
 			break
 		}
 	}
@@ -539,7 +544,7 @@ func stampConfigHash(objs []client.Object, entries []hashEntry) string {
 
 	for _, o := range objs {
 		dep, ok := o.(*appsv1.Deployment)
-		if !ok || dep.Name != apicomponent.ResourceName {
+		if !ok || dep.Name != target.DeploymentName {
 			continue
 		}
 		if dep.Spec.Template.Annotations == nil {
