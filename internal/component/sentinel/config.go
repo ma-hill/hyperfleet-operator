@@ -25,10 +25,12 @@ import (
 // This file renders Sentinel's two config files: config.yaml (per-instance
 // values) and broker.yaml (operator-level broker selection). Both are strict
 // subsets of hyperfleet-sentinel's pkg/config — keys the operator does not own
-// are absent so the binary applies its own defaults — and are serialized from
-// typed structs via sigs.k8s.io/yaml, which is byte-stable for a given input
-// (what makes the content-hash rollout meaningful). The RabbitMQ connection
-// URL is never written here; it arrives via env var from a Secret (render.go).
+// are absent so the binary applies its own defaults, except
+// message_decision/message_data, which the binary requires — and are
+// serialized from typed structs via sigs.k8s.io/yaml, which is byte-stable
+// for a given input (what makes the content-hash rollout meaningful). The
+// RabbitMQ connection URL is never written here; it arrives via env var from
+// a Secret (render.go).
 
 // Fixed settings shared by every instance; none is partner- or
 // operator-configurable in this phase.
@@ -86,12 +88,14 @@ type brokerConfigInput struct {
 // Sentinel's config.yaml; the json tags must match the keys
 // hyperfleet-sentinel's pkg/config deserializes.
 type sentinelConfig struct {
-	Sentinel     sentinelInfo  `json:"sentinel"`
-	DebugConfig  bool          `json:"debug_config"`
-	Log          logConfig     `json:"log"`
-	Clients      clientsConfig `json:"clients"`
-	ResourceType string        `json:"resource_type"`
-	PollInterval string        `json:"poll_interval"`
+	Sentinel        sentinelInfo          `json:"sentinel"`
+	DebugConfig     bool                  `json:"debug_config"`
+	Log             logConfig             `json:"log"`
+	Clients         clientsConfig         `json:"clients"`
+	ResourceType    string                `json:"resource_type"`
+	PollInterval    string                `json:"poll_interval"`
+	MessageDecision messageDecisionConfig `json:"message_decision"`
+	MessageData     messageDataConfig     `json:"message_data"`
 }
 
 type sentinelInfo struct {
@@ -117,6 +121,49 @@ type hyperfleetAPIClientConfig struct {
 
 type brokerClientConfig struct {
 	Topic string `json:"topic"`
+}
+
+// message_decision and message_data are the CEL defaults the
+// hyperfleet-sentinel chart ships; the binary validates both as required.
+type messageDecisionConfig struct {
+	Params []messageDecisionParam `json:"params"`
+	Result string                 `json:"result"`
+}
+
+type messageDecisionParam struct {
+	Name string `json:"name"`
+	Expr string `json:"expr"`
+}
+
+type messageDataConfig struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Href       string `json:"href"`
+	Generation string `json:"generation"`
+}
+
+func defaultMessageDecision() messageDecisionConfig {
+	return messageDecisionConfig{
+		Params: []messageDecisionParam{
+			{Name: "ref_time", Expr: `condition("Reconciled").last_updated_time`},
+			{Name: "is_reconciled", Expr: `condition("Reconciled").status == "True"`},
+			{Name: "has_ref_time", Expr: `ref_time != ""`},
+			{Name: "is_new_resource", Expr: "resource.generation == 1 && !has_ref_time"},
+			{Name: "generation_mismatch", Expr: `resource.generation > condition("Reconciled").observed_generation`},
+			{Name: "reconciled_and_stale", Expr: `is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")`},
+			{Name: "not_reconciled_and_debounced", Expr: `!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("10s")`},
+		},
+		Result: "is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced",
+	}
+}
+
+func defaultMessageData() messageDataConfig {
+	return messageDataConfig{
+		ID:         "resource.id",
+		Kind:       "resource.kind",
+		Href:       "resource.href",
+		Generation: "resource.generation",
+	}
 }
 
 // broker.yaml nests everything under one top-level broker key; exactly one of
@@ -156,8 +203,10 @@ func renderConfig(in configInput) (string, error) {
 			},
 			Broker: brokerClientConfig{Topic: brokerTopic(in.Namespace, in.ResourceType)},
 		},
-		ResourceType: in.ResourceType,
-		PollInterval: pollInterval,
+		ResourceType:    in.ResourceType,
+		PollInterval:    pollInterval,
+		MessageDecision: defaultMessageDecision(),
+		MessageData:     defaultMessageData(),
 	}
 
 	out, err := yaml.Marshal(cfg)

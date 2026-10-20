@@ -84,9 +84,14 @@ func TestRenderConfigKeys(t *testing.T) {
 	g.Expect(cfg["resource_type"]).To(Equal(testResourceType))
 	g.Expect(cfg["poll_interval"]).To(Equal(pollInterval))
 
-	// Absent keys fall back to the binary's own defaults.
-	g.Expect(cfg).NotTo(HaveKey("message_decision"))
-	g.Expect(cfg).NotTo(HaveKey("message_data"))
+	// The binary validates these as required; the rendered values are the
+	// chart's CEL defaults.
+	decision := cfg["message_decision"].(map[string]any)
+	g.Expect(decision["params"]).To(HaveLen(7))
+	g.Expect(decision["result"]).To(Equal("is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced"))
+	data := cfg["message_data"].(map[string]any)
+	g.Expect(data["id"]).To(Equal("resource.id"))
+	g.Expect(data["kind"]).To(Equal("resource.kind"))
 }
 
 func TestRenderBrokerConfigRabbitMQ(t *testing.T) {
