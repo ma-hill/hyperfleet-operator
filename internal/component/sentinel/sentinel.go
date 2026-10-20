@@ -19,7 +19,6 @@ package sentinel
 import (
 	"context"
 	"fmt"
-	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,11 +28,10 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 )
 
-// Component renders one Sentinel instance, watching a single resource type. A
-// bundle resolves to one Component per registered entity (one process watches
-// one resource type). It carries only rendering inputs and never touches the
-// cluster; the controller applies what Render produces.
-type Component struct {
+// Options carries all construction inputs for a Sentinel component instance.
+// It is embedded in Component so there is a single source of truth for field
+// names and documentation.
+type Options struct {
 	// Image is the Sentinel container image; Render errors when empty (no
 	// compiled-in fallback).
 	Image string
@@ -43,31 +41,22 @@ type Component struct {
 	ResourceType string
 	// APIBaseURL is the base URL of the API component this instance talks to.
 	APIBaseURL string
-	// BrokerType is the message broker type this instance uses. It is set from
-	BrokerType string
+	// BrokerType selects the message broker backend. Read once from BROKER_TYPE
+	// in main.go and threaded here via bundle.Config.
+	BrokerType BrokerType
 }
 
-type Options struct {
-	// ResourceType is the plural resource type this instance watches.
-	ResourceType string
-	// APIBaseURL is the base URL of the API component this instance talks to.
-	APIBaseURL string
+// Component renders one Sentinel instance, watching a single resource type. A
+// bundle resolves to one Component per registered entity (one process watches
+// one resource type). It carries only rendering inputs and never touches the
+// cluster; the controller applies what Render produces.
+type Component struct {
+	Options
 }
 
 // New constructs one Sentinel component instance.
-func New(image, namespace string, opts Options) *Component {
-	// Get default broker type from env variable, defaulting to RabbitMQ if not set.
-	brokerType := os.Getenv(BrokerTypeEnv)
-	if brokerType == "" {
-		brokerType = DefaultBrokerType
-	}
-	return &Component{
-		Image:        image,
-		Namespace:    namespace,
-		ResourceType: opts.ResourceType,
-		APIBaseURL:   opts.APIBaseURL,
-		BrokerType:   brokerType,
-	}
+func New(opts Options) *Component {
+	return &Component{Options: opts}
 }
 
 // Name identifies this instance in logs, metrics and labels; suffixed with
@@ -80,10 +69,25 @@ func (c *Component) Name() string {
 // stamp a config-hash annotation for rolling pods on config/secret changes.
 func (c *Component) Rollout() component.RolloutTarget {
 	return component.RolloutTarget{
-		ConfigMapName:  ConfigMapName(c.ResourceType),
-		ConfigFileKey:  ConfigFileKey,
+		ConfigEntries: []component.ConfigEntry{
+			{ConfigMapName: ConfigMapName(c.ResourceType), ConfigFileKey: ConfigFileKey},
+			{ConfigMapName: BrokerConfigMapName(c.ResourceType), ConfigFileKey: BrokerConfigFileKey},
+		},
 		DeploymentName: ResourceName(c.ResourceType),
 	}
+}
+
+// ReferencedSecrets returns the Secrets this Sentinel instance consumes. Only
+// RabbitMQ requires a credential Secret; it must be pre-created by the partner
+// (the operator references but never creates it). A rotation of the Secret
+// triggers a reconcile and rolls the Sentinel pods via the config hash.
+func (c *Component) ReferencedSecrets(_ *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference {
+	if c.BrokerType == BrokerTypeRabbitMQ {
+		return []component.SecretReference{
+			{Role: "broker", SecretName: BrokerSecretName},
+		}
+	}
+	return nil
 }
 
 // Render returns this instance's operand set in dependency order. Pure: no
@@ -102,11 +106,7 @@ func (c *Component) Render(_ context.Context, cr *hyperfleetv1alpha1.HyperFleetC
 	if err != nil {
 		return nil, fmt.Errorf("render sentinel config for %q: %w", c.ResourceType, err)
 	}
-	brokerYAML, err := renderBrokerConfig(brokerConfigInput{
-		BrokerType: c.BrokerType,
-		// Will be empty if the broker type is not Google Pub/Sub
-		BrokerProjectID: os.Getenv(BrokerGooglePubSubProjectIDEnv),
-	})
+	brokerYAML, err := renderBrokerConfig(c.BrokerType)
 	if err != nil {
 		return nil, fmt.Errorf("render sentinel broker config for %q: %w", c.ResourceType, err)
 	}

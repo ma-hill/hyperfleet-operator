@@ -86,10 +86,32 @@ func (c *Component) Name() string {
 // stamp a config-hash annotation for rolling pods on config/secret changes.
 func (c *Component) Rollout() component.RolloutTarget {
 	return component.RolloutTarget{
-		ConfigMapName:  ConfigMapName,
-		ConfigFileKey:  ConfigFileKey,
+		ConfigEntries: []component.ConfigEntry{
+			{ConfigMapName: ConfigMapName, ConfigFileKey: ConfigFileKey},
+		},
 		DeploymentName: ResourceName,
 	}
+}
+
+// ReferencedSecrets returns the Secrets the API pods consume. The database
+// Secret is always referenced; TLS and JWKS Secrets are conditional on the CR.
+func (c *Component) ReferencedSecrets(cr *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference {
+	refs := []component.SecretReference{
+		{Role: "database", SecretName: cr.Spec.API.Database.SecretRef.Name},
+	}
+	if cr.Spec.API.TLS != nil {
+		refs = append(refs, component.SecretReference{
+			Role:       "tls",
+			SecretName: cr.Spec.API.TLS.SecretRef.Name,
+		})
+	}
+	if AuthEnabled(cr) && cr.Spec.API.Auth.JWKCertSecretRef != nil {
+		refs = append(refs, component.SecretReference{
+			Role:       "jwks",
+			SecretName: cr.Spec.API.Auth.JWKCertSecretRef.Name,
+		})
+	}
+	return refs
 }
 
 // Render returns the full desired-state operand set for the API, in a

@@ -25,7 +25,8 @@ const wantNotSHA256Digest = "not a sha256 digest"
 var (
 	operatorImage = "registry.example.com/hyperfleet-operator@sha256:" + strings.Repeat("1", 64)
 	apiImage      = "registry.example.com/hyperfleet-api@sha256:" + strings.Repeat("2", 64)
-	extraImage    = "registry.example.com/extra@sha256:" + strings.Repeat("3", 64)
+	sentinelImage = "registry.example.com/hyperfleet-sentinel@sha256:" + strings.Repeat("3", 64)
+	extraImage    = "registry.example.com/extra@sha256:" + strings.Repeat("4", 64)
 )
 
 func validCSV() string {
@@ -45,11 +46,15 @@ spec:
                 env:
                 - name: RELATED_IMAGE_HYPERFLEET_API
                   value: ` + apiImage + `
+                - name: RELATED_IMAGE_HYPERFLEET_SENTINEL
+                  value: ` + sentinelImage + `
   relatedImages:
   - name: hyperfleet-operator
     image: ` + operatorImage + `
   - name: hyperfleet-api
     image: ` + apiImage + `
+  - name: hyperfleet-sentinel
+    image: ` + sentinelImage + `
 `
 }
 

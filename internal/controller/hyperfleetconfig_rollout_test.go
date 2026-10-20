@@ -454,8 +454,9 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 	}
 
 	apiTarget := component.RolloutTarget{
-		ConfigMapName:  apicomponent.ConfigMapName,
-		ConfigFileKey:  apicomponent.ConfigFileKey,
+		ConfigEntries: []component.ConfigEntry{
+			{ConfigMapName: apicomponent.ConfigMapName, ConfigFileKey: apicomponent.ConfigFileKey},
+		},
 		DeploymentName: apicomponent.ResourceName,
 	}
 

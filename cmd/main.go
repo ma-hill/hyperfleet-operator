@@ -279,8 +279,13 @@ func main() {
 		setupLog.Error(nil, "RELATED_IMAGE_HYPERFLEET_SENTINEL not set")
 		os.Exit(1)
 	case !strings.Contains(sentinelImage, "@sha256:"):
-		setupLog.Error(nil, "RELATED_IMAGE_HYPERFLEET_SENTINEL is not digest-pinned; pin the Sentinel image by digest for production", "image", sentinelImage)
-		os.Exit(1)
+		setupLog.Info("RELATED_IMAGE_HYPERFLEET_SENTINEL is not digest-pinned; "+
+			"pin the Sentinel image by digest for production", "image", sentinelImage)
+	}
+
+	brokerType := sentinel.BrokerType(os.Getenv(sentinel.BrokerTypeEnv))
+	if brokerType == "" {
+		brokerType = sentinel.DefaultBrokerType
 	}
 
 	if err := (&controller.HyperFleetConfigReconciler{
@@ -290,6 +295,7 @@ func main() {
 		OperatorNamespace: operatorNamespace,
 		APIImage:          apiImage,
 		SentinelImage:     sentinelImage,
+		BrokerType:        brokerType,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HyperFleetConfig")
 		os.Exit(1)

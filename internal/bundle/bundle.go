@@ -45,11 +45,15 @@ import (
 //   - Rollout tells the controller which ConfigMap and Deployment carry the
 //     component's config-hash annotation, so stampConfigHash works for any
 //     component without hardcoding names (HYPERFLEET-1673).
+//   - ReferencedSecrets declares which Secrets this component's pods consume,
+//     so the controller scopes each component's rollout hash to only the
+//     Secrets that are consumed by the component.
 type Component interface {
 	Name() string
 	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]client.Object, error)
 	Conditions(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error)
 	Rollout() component.RolloutTarget
+	ReferencedSecrets(cr *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference
 }
 
 // Config carries the inputs the resolver needs to construct components.
@@ -60,6 +64,9 @@ type Config struct {
 	SentinelImage string
 	// Namespace is the operator's own namespace, where operands are created.
 	Namespace string
+	// BrokerType selects the Sentinel message broker backend. Read once from
+	// BROKER_TYPE in main.go.
+	BrokerType sentinel.BrokerType
 	// ResolvedJWKSURL is the JWKS URL the controller derived via OIDC discovery.
 	// It is threaded through to the API component, which needs it only when auth
 	// is enabled and the CR pins neither a JWKS URL nor a JWKS Secret. Empty
@@ -147,9 +154,12 @@ func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error
 	// Add one sentinel instance per resource type
 	for _, resourceType := range entities {
 		components = append(components,
-			sentinel.New(cfg.SentinelImage, cfg.Namespace, sentinel.Options{
+			sentinel.New(sentinel.Options{
+				Image:        cfg.SentinelImage,
+				Namespace:    cfg.Namespace,
 				ResourceType: resourceType.Plural,
 				APIBaseURL:   apiBaseUrl,
+				BrokerType:   cfg.BrokerType,
 			}))
 	}
 
@@ -174,4 +184,16 @@ func Resolve(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error) {
 		return nil, fmt.Errorf("resolve bundle %q: %w", b, err)
 	}
 	return append(shared, bundleSpecific(b)...), nil
+}
+
+// SetResolvedJWKSURL sets the OIDC-discovered JWKS URL on the API component.
+// The controller calls this after bundle resolution but before Render, since
+// OIDC discovery is a network read that cannot happen at resolve time.
+func SetResolvedJWKSURL(components []Component, url string) {
+	for _, c := range components {
+		if ac, ok := c.(*api.Component); ok {
+			ac.ResolvedJWKSURL = url
+			return
+		}
+	}
 }

@@ -560,3 +560,82 @@ func TestRenderService(t *testing.T) {
 	g.Expect(svc.Spec.Ports).To(HaveLen(3))
 	g.Expect(svc.Spec.Selector).To(HaveKeyWithValue(labelComponent, ComponentName))
 }
+
+func TestReferencedSecretsAlwaysIncludesDatabase(t *testing.T) {
+	g := NewWithT(t)
+	c := New("", testNamespace, Options{})
+	cr := &hyperfleetv1alpha1.HyperFleetConfig{
+		Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
+			API: hyperfleetv1alpha1.APISpec{
+				Database: hyperfleetv1alpha1.DatabaseSpec{
+					SecretRef: hyperfleetv1alpha1.SecretReference{Name: testDBSecret},
+				},
+				Auth: hyperfleetv1alpha1.AuthSpec{Enabled: ptr.To(false)},
+			},
+		},
+	}
+	refs := c.ReferencedSecrets(cr)
+	g.Expect(refs).To(HaveLen(1))
+	g.Expect(refs[0].Role).To(Equal("database"))
+	g.Expect(refs[0].SecretName).To(Equal(testDBSecret))
+}
+
+func TestReferencedSecretsIncludesTLSWhenSet(t *testing.T) {
+	g := NewWithT(t)
+	c := New("", testNamespace, Options{})
+	cr := testCR()
+	cr.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
+		SecretRef: hyperfleetv1alpha1.SecretReference{Name: testTLSSecret},
+	}
+	refs := c.ReferencedSecrets(cr)
+	roles := make([]string, len(refs))
+	for i, r := range refs {
+		roles[i] = r.Role
+	}
+	g.Expect(roles).To(ContainElement("tls"))
+}
+
+func TestReferencedSecretsExcludesTLSWhenNil(t *testing.T) {
+	g := NewWithT(t)
+	c := New("", testNamespace, Options{})
+	cr := testCR()
+	cr.Spec.API.TLS = nil
+	refs := c.ReferencedSecrets(cr)
+	for _, r := range refs {
+		g.Expect(r.Role).NotTo(Equal("tls"))
+	}
+}
+
+func TestReferencedSecretsIncludesJWKSWhenAuthEnabledAndRefSet(t *testing.T) {
+	g := NewWithT(t)
+	c := New("", testNamespace, Options{})
+	cr := testCR()
+	refs := c.ReferencedSecrets(cr)
+	roles := make([]string, len(refs))
+	for i, r := range refs {
+		roles[i] = r.Role
+	}
+	g.Expect(roles).To(ContainElement("jwks"))
+}
+
+func TestReferencedSecretsExcludesJWKSWhenAuthDisabled(t *testing.T) {
+	g := NewWithT(t)
+	c := New("", testNamespace, Options{})
+	cr := testCR()
+	cr.Spec.API.Auth.Enabled = ptr.To(false)
+	refs := c.ReferencedSecrets(cr)
+	for _, r := range refs {
+		g.Expect(r.Role).NotTo(Equal("jwks"))
+	}
+}
+
+func TestReferencedSecretsExcludesJWKSWhenRefNil(t *testing.T) {
+	g := NewWithT(t)
+	c := New("", testNamespace, Options{})
+	cr := testCR()
+	cr.Spec.API.Auth.JWKCertSecretRef = nil
+	refs := c.ReferencedSecrets(cr)
+	for _, r := range refs {
+		g.Expect(r.Role).NotTo(Equal("jwks"))
+	}
+}

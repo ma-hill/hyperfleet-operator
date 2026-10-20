@@ -199,6 +199,8 @@ same `kustomization.yaml` that `make bundle-build` uses before rendering it:
 ```sh
 export RELATED_IMAGE_HYPERFLEET_API=<api-image>
 export RELATED_IMAGE_HYPERFLEET_OPERATOR=<operator-image>
+export RELATED_IMAGE_HYPERFLEET_SENTINEL=<sentinel-image>
+
 envsubst < config/manifests/dev/patch-images.yaml > config/manifests/dev/kustomization.yaml
 go tool -modfile=tools/go.mod kustomize build config/manifests/dev
 ```

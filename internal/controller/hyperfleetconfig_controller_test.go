@@ -113,6 +113,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			OperatorNamespace: operatorNamespace,
 			APIImage:          apiImage,
 			SentinelImage:     sentinelImage,
+			BrokerType:        sentinelcomponent.DefaultBrokerType,
 		}
 	})
 
@@ -578,6 +579,7 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 			OperatorNamespace: "does-not-exist",
 			APIImage:          apiImage,
 			SentinelImage:     sentinelImage,
+			BrokerType:        sentinelcomponent.DefaultBrokerType,
 		}
 
 		// The Deployment among the rendered objects would detect as a create-triggered

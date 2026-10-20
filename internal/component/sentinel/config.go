@@ -18,6 +18,7 @@ package sentinel
 
 import (
 	"fmt"
+	"os"
 
 	"sigs.k8s.io/yaml"
 )
@@ -45,11 +46,6 @@ type configInput struct {
 	ResourceType string
 	APIBaseURL   string
 	BrokerTopic  string
-}
-
-type brokerConfigInput struct {
-	BrokerType      string
-	BrokerProjectID string
 }
 
 // sentinelConfig and its nested types are the operator-owned subset of
@@ -141,12 +137,13 @@ type brokerFileDocument struct {
 }
 
 type brokerFileConfig struct {
-	Type         string              `json:"type"`
+	Type         BrokerType          `json:"type"`
 	RabbitMQ     *rabbitMQConfig     `json:"rabbitmq,omitempty"`
 	GooglePubSub *googlePubSubConfig `json:"googlepubsub,omitempty"`
 }
 
 type rabbitMQConfig struct {
+	URL          string `json:"url"`
 	ExchangeType string `json:"exchange_type"`
 }
 
@@ -194,24 +191,28 @@ func brokerTopic(namespace, resourceType string) string {
 // renderBrokerConfig serializes broker.yaml. It errors on a broker type that
 // is not one of the BrokerType* constants, or on googlepubsub without a
 // project id, rather than emitting a config Sentinel would reject at startup.
-func renderBrokerConfig(in brokerConfigInput) (string, error) {
+func renderBrokerConfig(brokerType BrokerType) (string, error) {
 	cfg := brokerFileConfig{}
-	switch in.BrokerType {
+	switch brokerType {
 	case BrokerTypeGooglePubSub:
-		if in.BrokerProjectID == "" {
+		brokerProjectID := os.Getenv(BrokerGooglePubSubProjectIDEnv)
+		if brokerProjectID == "" {
 			return "", fmt.Errorf("%s is required when %s is %q", BrokerGooglePubSubProjectIDEnv, BrokerTypeEnv, BrokerTypeGooglePubSub)
 		}
 		cfg.Type = BrokerTypeGooglePubSub
 		cfg.GooglePubSub = &googlePubSubConfig{
-			ProjectID: in.BrokerProjectID,
+			ProjectID: brokerProjectID,
 			// Set to false in production
 			CreateTopicIfMissing: false,
 		}
 	case BrokerTypeRabbitMQ:
 		cfg.Type = BrokerTypeRabbitMQ
-		cfg.RabbitMQ = &rabbitMQConfig{ExchangeType: brokerExchangeType}
+		cfg.RabbitMQ = &rabbitMQConfig{
+			URL:          "amqp://placeholder:placeholder@rabbitmq.placeholder.svc.cluster.local:5672/",
+			ExchangeType: brokerExchangeType,
+		}
 	default:
-		return "", fmt.Errorf("unknown %s %q: must be %q or %q", BrokerTypeEnv, in.BrokerType, BrokerTypeRabbitMQ, BrokerTypeGooglePubSub)
+		return "", fmt.Errorf("unknown %s %q: must be %q or %q", BrokerTypeEnv, brokerType, BrokerTypeRabbitMQ, BrokerTypeGooglePubSub)
 	}
 
 	out, err := yaml.Marshal(brokerFileDocument{Broker: cfg})
@@ -219,4 +220,5 @@ func renderBrokerConfig(in brokerConfigInput) (string, error) {
 		return "", fmt.Errorf("marshal sentinel broker config: %w", err)
 	}
 	return brokerConfigHeader + string(out), nil
+
 }

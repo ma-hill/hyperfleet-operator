@@ -136,7 +136,7 @@ func containerSecurityContext() *corev1.SecurityContext {
 // broker URL comes from a Secret-sourced env var; Google Pub/Sub authenticates
 // via Workload Identity and needs no credential. The config-hash pod-template
 // annotation is added by the controller, not here.
-func deployment(crName, image, namespace, resourceType, brokerType string) *appsv1.Deployment {
+func deployment(crName, image, namespace, resourceType string, brokerType BrokerType) *appsv1.Deployment {
 	name := ResourceName(resourceType)
 
 	env := []corev1.EnvVar{
@@ -276,8 +276,7 @@ func configMap(crName, namespace, resourceType, configYAML string) *corev1.Confi
 	}
 }
 
-// brokerConfigMap holds the rendered broker.yaml. Not part of Rollout(): its
-// content has no variable input in this phase.
+// brokerConfigMap holds the rendered broker.yaml.
 func brokerConfigMap(crName, namespace, resourceType, brokerYAML string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},

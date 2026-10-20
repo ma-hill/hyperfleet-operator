@@ -139,7 +139,9 @@ use the direct-deployment target with explicit operator and API images:
 ```sh
 make deploy \
   RELATED_IMAGE_HYPERFLEET_OPERATOR=<operator-image> \
-  RELATED_IMAGE_HYPERFLEET_API=<api-image>
+  RELATED_IMAGE_HYPERFLEET_API=<api-image> \
+  RELATED_IMAGE_HYPERFLEET_SENTINEL=<sentinel-image> \
+
 kubectl rollout status deployment/hyperfleet-operator-controller-manager \
   -n hyperfleet-system
 ```
