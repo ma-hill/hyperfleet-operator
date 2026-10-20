@@ -179,6 +179,7 @@ type brokerFileConfig struct {
 }
 
 type rabbitMQConfig struct {
+	URL          string `json:"url"`
 	ExchangeType string `json:"exchange_type"`
 }
 
@@ -236,7 +237,7 @@ func renderBrokerConfig(in brokerConfigInput) (string, error) {
 		cfg.GooglePubSub = &googlePubSubConfig{ProjectID: in.BrokerProjectID}
 	case BrokerTypeRabbitMQ, "":
 		cfg.Type = BrokerTypeRabbitMQ
-		cfg.RabbitMQ = &rabbitMQConfig{ExchangeType: brokerExchangeType}
+		cfg.RabbitMQ = &rabbitMQConfig{URL: "amqp://placeholder:placeholder@rabbitmq.placeholder.svc.cluster.local:5672/", ExchangeType: brokerExchangeType}
 	default:
 		return "", fmt.Errorf("unknown %s %q: must be %q or %q", BrokerTypeEnv, in.BrokerType, BrokerTypeRabbitMQ, BrokerTypeGooglePubSub)
 	}
