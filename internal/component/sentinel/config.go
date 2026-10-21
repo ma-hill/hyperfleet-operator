@@ -18,7 +18,6 @@ package sentinel
 
 import (
 	"fmt"
-	"os"
 
 	"sigs.k8s.io/yaml"
 )
@@ -191,18 +190,16 @@ func brokerTopic(namespace, resourceType string) string {
 // renderBrokerConfig serializes broker.yaml. It errors on a broker type that
 // is not one of the BrokerType* constants, or on googlepubsub without a
 // project id, rather than emitting a config Sentinel would reject at startup.
-func renderBrokerConfig(brokerType BrokerType) (string, error) {
+func renderBrokerConfig(brokerInfo *BrokerInfo) (string, error) {
 	cfg := brokerFileConfig{}
-	switch brokerType {
+	switch brokerInfo.Type {
 	case BrokerTypeGooglePubSub:
-		brokerProjectID := os.Getenv(BrokerGooglePubSubProjectIDEnv)
-		if brokerProjectID == "" {
+		if brokerInfo.ProjectID == "" {
 			return "", fmt.Errorf("%s is required when %s is %q", BrokerGooglePubSubProjectIDEnv, BrokerTypeEnv, BrokerTypeGooglePubSub)
 		}
 		cfg.Type = BrokerTypeGooglePubSub
 		cfg.GooglePubSub = &googlePubSubConfig{
-			ProjectID: brokerProjectID,
-			// Set to false in production
+			ProjectID:            brokerInfo.ProjectID,
 			CreateTopicIfMissing: false,
 		}
 	case BrokerTypeRabbitMQ:
@@ -212,7 +209,7 @@ func renderBrokerConfig(brokerType BrokerType) (string, error) {
 			ExchangeType: brokerExchangeType,
 		}
 	default:
-		return "", fmt.Errorf("unknown %s %q: must be %q or %q", BrokerTypeEnv, brokerType, BrokerTypeRabbitMQ, BrokerTypeGooglePubSub)
+		return "", fmt.Errorf("unknown %s %q: must be %q or %q", BrokerTypeEnv, brokerInfo.Type, BrokerTypeRabbitMQ, BrokerTypeGooglePubSub)
 	}
 
 	out, err := yaml.Marshal(brokerFileDocument{Broker: cfg})

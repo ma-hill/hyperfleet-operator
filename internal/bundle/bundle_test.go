@@ -68,12 +68,13 @@ func TestEntitiesForBundleUnknownErrors(t *testing.T) {
 func TestResolveWiresSharedTierComponents(t *testing.T) {
 	g := NewWithT(t)
 
-	const jwks = "https://issuer.example.com/keys"
 	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
-		APIImage:        "example.com/api:test",
-		SentinelImage:   "example.com/sentinel:test",
-		Namespace:       "hyperfleet-system",
-		ResolvedJWKSURL: jwks,
+		APIImage:      "example.com/api:test",
+		SentinelImage: "example.com/sentinel:test",
+		Namespace:     "hyperfleet-system",
+		BrokerInfo: &sentinel.BrokerInfo{
+			Type: sentinel.BrokerTypeRabbitMQ,
+		},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -84,7 +85,6 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 	g.Expect(ok).To(BeTrue())
 	g.Expect(apiComp.Image).To(Equal("example.com/api:test"))
 	g.Expect(apiComp.Namespace).To(Equal("hyperfleet-system"))
-	g.Expect(apiComp.ResolvedJWKSURL).To(Equal(jwks))
 	g.Expect(apiComp.Entities).To(Equal(cloudCAPIEntities))
 
 	expectedTypes := make([]string, len(cloudCAPIEntities))
@@ -98,7 +98,26 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 		g.Expect(sc.Image).To(Equal("example.com/sentinel:test"))
 		g.Expect(sc.Namespace).To(Equal("hyperfleet-system"))
 		g.Expect(sc.APIBaseURL).To(Equal(api.ServiceURL("hyperfleet-system")))
+		g.Expect(sc.BrokerInfo.Type).To(Equal(sentinel.BrokerTypeRabbitMQ))
 	}
+}
+
+func TestSetResolvedJWKSURL(t *testing.T) {
+	g := NewWithT(t)
+
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
+		APIImage:      "example.com/api:test",
+		SentinelImage: "example.com/sentinel:test",
+		Namespace:     "hyperfleet-system",
+		BrokerInfo:    &sentinel.BrokerInfo{Type: sentinel.BrokerTypeRabbitMQ},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	apiComp, ok := comps[0].(*api.Component)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(apiComp.ResolvedJWKSURL).To(BeEmpty())
+	SetResolvedJWKSURL(comps, "https://issuer.example.com/.well-known/jwks.json")
+	g.Expect(apiComp.ResolvedJWKSURL).To(Equal("https://issuer.example.com/.well-known/jwks.json"))
 }
 
 func TestResolveOnPremAgentErrors(t *testing.T) {

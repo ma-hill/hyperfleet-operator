@@ -43,7 +43,7 @@ type Options struct {
 	APIBaseURL string
 	// BrokerType selects the message broker backend. Read once from BROKER_TYPE
 	// in main.go and threaded here via bundle.Config.
-	BrokerType BrokerType
+	BrokerInfo *BrokerInfo
 }
 
 // Component renders one Sentinel instance, watching a single resource type. A
@@ -82,7 +82,7 @@ func (c *Component) Rollout() component.RolloutTarget {
 // (the operator references but never creates it). A rotation of the Secret
 // triggers a reconcile and rolls the Sentinel pods via the config hash.
 func (c *Component) ReferencedSecrets(_ *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference {
-	if c.BrokerType == BrokerTypeRabbitMQ {
+	if c.BrokerInfo.Type == BrokerTypeRabbitMQ {
 		return []component.SecretReference{
 			{Role: "broker", SecretName: BrokerSecretName},
 		}
@@ -106,7 +106,7 @@ func (c *Component) Render(_ context.Context, cr *hyperfleetv1alpha1.HyperFleetC
 	if err != nil {
 		return nil, fmt.Errorf("render sentinel config for %q: %w", c.ResourceType, err)
 	}
-	brokerYAML, err := renderBrokerConfig(c.BrokerType)
+	brokerYAML, err := renderBrokerConfig(c.BrokerInfo)
 	if err != nil {
 		return nil, fmt.Errorf("render sentinel broker config for %q: %w", c.ResourceType, err)
 	}
@@ -116,7 +116,7 @@ func (c *Component) Render(_ context.Context, cr *hyperfleetv1alpha1.HyperFleetC
 		configMap(cr.Name, c.Namespace, c.ResourceType, configYAML),
 		brokerConfigMap(cr.Name, c.Namespace, c.ResourceType, brokerYAML),
 		networkPolicy(cr.Name, c.Namespace, c.ResourceType),
-		deployment(cr.Name, c.Image, c.Namespace, c.ResourceType, c.BrokerType),
+		deployment(cr.Name, c.Image, c.Namespace, c.ResourceType, c.BrokerInfo.Type),
 	}, nil
 }
 

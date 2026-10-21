@@ -17,7 +17,7 @@ GOBIN=$(shell go env GOBIN)
 endif
 
 # Container tool (docker or podman)
-CONTAINER_TOOL ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null)
+CONTAINER_TOOL ?= $(notdir $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null))
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.

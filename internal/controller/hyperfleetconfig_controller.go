@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -64,9 +65,12 @@ type HyperFleetConfigReconciler struct {
 	// SentinelImage is the container image for the Sentinel operand. Sourced from
 	// RELATED_IMAGE_HYPERFLEET_SENTINEL in main.go.
 	SentinelImage string
-	// BrokerType selects the Sentinel message broker backend. Sourced from
-	// BROKER_TYPE in main.go; empty defaults to RabbitMQ.
-	BrokerType sentinel.BrokerType
+	// BrokerInfo contains the explicit fields required
+	// Contains Type which maps to BROKER_TYPE env variable
+	// Contains ProjectId which maps to BROKER_GOOGLEPUBSUB_PROJECT_ID
+	// which is only required when broker type is googlepubsub
+	BrokerInfo *sentinel.BrokerInfo
+
 	// HTTPClient performs OIDC discovery requests. Nil falls back to a lazily-built,
 	// reused hardened default client (see discoverJWKSURL/discoveryClientOnce);
 	// tests inject one pointed at an httptest server, bypassing that default
@@ -168,7 +172,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		APIImage:      r.APIImage,
 		SentinelImage: r.SentinelImage,
 		Namespace:     r.OperatorNamespace,
-		BrokerType:    r.BrokerType,
+		BrokerInfo:    r.BrokerInfo,
 	})
 	if err != nil {
 		metrics.IncReconcileError("bundle")
@@ -183,7 +187,6 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// before OIDC discovery so a missing Secret still takes precedence in
 	// degradedCondition even when discovery also fails in the same reconcile.
 	componentEntries := make(map[string][]hashEntry, len(components))
-	missingSet := map[string]struct{}{}
 	for _, comp := range components {
 		refs := comp.ReferencedSecrets(cr)
 		entries, err := r.resolveSecretEntries(ctx, refs)
@@ -194,14 +197,14 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		componentEntries[comp.Name()] = entries
 		for _, e := range entries {
 			if !e.present {
-				missingSet[e.id] = struct{}{}
+				missingSecrets = append(missingSecrets, e.id)
 			}
 		}
 	}
-	for id := range missingSet {
-		missingSecrets = append(missingSecrets, id)
-	}
-
+	// Sort and deduplicate the missing Secret names so the Degraded condition
+	// message is deterministic and does not flip-flop on repeated reconciles.
+	slices.Sort(missingSecrets)
+	missingSecrets = slices.Compact(missingSecrets)
 
 	// Resolve the JWKS URL. When auth is on and the CR pins neither a JWKS URL nor
 	// a JWKS Secret, this performs OIDC discovery — a network read, so it lives

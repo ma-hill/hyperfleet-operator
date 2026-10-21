@@ -63,17 +63,14 @@ type Component struct {
 type Options struct {
 	// Entities is the bundle-specific entity registration list.
 	Entities []EntityDescriptor
-	// ResolvedJWKSURL is the OIDC-discovered JWKS URL; see Component.
-	ResolvedJWKSURL string
 }
 
 // New constructs the API component for the given image and operator namespace.
 func New(image, namespace string, opts Options) *Component {
 	return &Component{
-		Image:           image,
-		Namespace:       namespace,
-		Entities:        opts.Entities,
-		ResolvedJWKSURL: opts.ResolvedJWKSURL,
+		Image:     image,
+		Namespace: namespace,
+		Entities:  opts.Entities,
 	}
 }
 

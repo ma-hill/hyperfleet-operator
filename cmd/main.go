@@ -19,8 +19,10 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -49,6 +51,8 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/servicemonitor"
 	// +kubebuilder:scaffold:imports
 )
+
+var gcpProjectIDRegexp = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
 
 var (
 	scheme   = runtime.NewScheme()
@@ -269,10 +273,13 @@ func main() {
 			"image", apiImage)
 	}
 
-	// RELATED_IMAGE_HYPERFLEET_SENTINEL should be digest-pinned in production; OLM pins
-	// it at bundle-build time via the relatedImages convention. Warn — but do not
-	// fail — when it is unset or uses a mutable tag, so `make run` and tag-based
-	// deploys keep working while the risk is surfaced in the logs.
+	// ---
+	// Start of SENTINEL required env variables
+	// ---
+	// RELATED_IMAGE_HYPERFLEET_SENTINEL is required (Sentinel has no compiled-in
+	// default image). It should be digest-pinned in production; OLM pins it at
+	// bundle-build time via the relatedImages convention. A mutable tag only
+	// produces a warning, so tag-based deploys keep working.
 	sentinelImage := os.Getenv(sentinel.RelatedImageEnv)
 	switch {
 	case sentinelImage == "":
@@ -283,9 +290,11 @@ func main() {
 			"pin the Sentinel image by digest for production", "image", sentinelImage)
 	}
 
-	brokerType := sentinel.BrokerType(os.Getenv(sentinel.BrokerTypeEnv))
-	if brokerType == "" {
-		brokerType = sentinel.DefaultBrokerType
+	// Create BrokerInfo struct to pass to the reconciler.
+	brokerInfo, err := envToBrokerInfo()
+	if err != nil {
+		setupLog.Error(nil, err.Error())
+		os.Exit(1)
 	}
 
 	if err := (&controller.HyperFleetConfigReconciler{
@@ -295,7 +304,7 @@ func main() {
 		OperatorNamespace: operatorNamespace,
 		APIImage:          apiImage,
 		SentinelImage:     sentinelImage,
-		BrokerType:        brokerType,
+		BrokerInfo:        brokerInfo,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "HyperFleetConfig")
 		os.Exit(1)
@@ -383,4 +392,38 @@ func namespacedCacheByObject(operatorNamespace string) map[client.Object]cache.B
 		}
 	}
 	return byObject
+}
+
+// envToBrokerInfo will extract BROKER_TYPE and BROKER_GOOGLEPUBSUB_PROJECT_ID into
+// BrokerInfo struct to use for the sentinel component
+func envToBrokerInfo() (*sentinel.BrokerInfo, error) {
+	brokerInfo := &sentinel.BrokerInfo{}
+	// Will fail if BROKER_TYPE is not set to a valid value
+	// we log the error and exit.
+	brokerType := sentinel.BrokerType(os.Getenv(sentinel.BrokerTypeEnv))
+	if brokerType == "" {
+		brokerType = sentinel.DefaultBrokerType
+	} else if brokerType != sentinel.BrokerTypeRabbitMQ && brokerType != sentinel.BrokerTypeGooglePubSub {
+		err := fmt.Errorf("BROKER_TYPE must be set to either 'rabbitmq' or 'googlepubsub'")
+		return nil, err
+	}
+	// brokerType is set to "rabbitmq" or "googlepubsub" at this point
+	brokerInfo.Type = brokerType
+
+	if brokerType == sentinel.BrokerTypeGooglePubSub {
+		brokerProjectID := os.Getenv(sentinel.BrokerGooglePubSubProjectIDEnv)
+		// verify that it is not empty
+		if brokerProjectID == "" {
+			err := fmt.Errorf("BROKER_GOOGLEPUBSUB_PROJECT_ID must be set and non-empty if broker type is 'googlepubsub'")
+			return nil, err
+		}
+		// GCP project IDs: 6-30 lowercase letters, digits and hyphens;
+		// must start with a letter and must not end with a hyphen.
+		if !gcpProjectIDRegexp.MatchString(brokerProjectID) {
+			err := fmt.Errorf("BROKER_GOOGLEPUBSUB_PROJECT_ID: %q is not a valid GCP project ID", brokerProjectID)
+			return nil, err
+		}
+		brokerInfo.ProjectID = brokerProjectID
+	}
+	return brokerInfo, nil
 }

@@ -18,11 +18,10 @@ package sentinel
 const ComponentName = "sentinel"
 const RelatedImageEnv = "RELATED_IMAGE_HYPERFLEET_SENTINEL"
 
+// Broker constants and types
 const BrokerSecretName = "hyperfleet-broker-credentials"
-
 const BrokerSecretKey = "BROKER_RABBITMQ_URL"
 
-// BrokerType identifies the message broker backend written into broker.yaml.
 type BrokerType string
 
 const (
@@ -30,12 +29,22 @@ const (
 	BrokerTypeGooglePubSub BrokerType = "googlepubsub"
 )
 
+// BrokerInfo carries the required variables set through environment variables
+// and passed through the operator to the Sentinel component.
+// ProjectID is required for Google Pub/Sub, and ignored for RabbitMQ.
+// Type is required and must be one of the BrokerType* constants.
+type BrokerInfo struct {
+	Type      BrokerType
+	ProjectID string
+}
+
 const (
 	DefaultBrokerType              = BrokerTypeRabbitMQ
 	BrokerTypeEnv                  = "BROKER_TYPE"
 	BrokerGooglePubSubProjectIDEnv = "BROKER_GOOGLEPUBSUB_PROJECT_ID"
 )
 
+// ConfigMap keys
 const (
 	ConfigFileKey       = "config.yaml"
 	BrokerConfigFileKey = "broker.yaml"

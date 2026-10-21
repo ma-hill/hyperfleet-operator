@@ -17,109 +17,186 @@ limitations under the License.
 package sentinel
 
 import (
+	"strings"
 	"testing"
 
 	. "github.com/onsi/gomega"
 	"sigs.k8s.io/yaml"
-
-	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
-	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
 )
 
-func parseBrokerConfig(t *testing.T, out string) map[string]any {
-	t.Helper()
-	g := NewWithT(t)
-	var m map[string]any
-	g.Expect(yaml.Unmarshal([]byte(out), &m)).To(Succeed())
-	return m
-}
-
-func TestRenderBrokerConfigRabbitMQHasURLKey(t *testing.T) {
+func TestRenderConfigDefaults(t *testing.T) {
 	g := NewWithT(t)
 
-	out, err := renderBrokerConfig(BrokerTypeRabbitMQ)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(out).To(HavePrefix(brokerConfigHeader))
-
-	broker := parseBrokerConfig(t, out)["broker"].(map[string]any)
-	g.Expect(broker["type"]).To(Equal(string(BrokerTypeRabbitMQ)))
-
-	rmq := broker["rabbitmq"].(map[string]any)
-	g.Expect(rmq).To(HaveKey("url"), "rabbitmq.url must be present so viper can bind BROKER_RABBITMQ_URL")
-	g.Expect(rmq["exchange_type"]).To(Equal(brokerExchangeType))
-}
-
-func TestRenderBrokerConfigGooglePubSub(t *testing.T) {
-	g := NewWithT(t)
-
-	t.Setenv(BrokerGooglePubSubProjectIDEnv, "my-project")
-
-	out, err := renderBrokerConfig(BrokerTypeGooglePubSub)
+	out, err := renderConfig(configInput{
+		ResourceType: testResourceType,
+		APIBaseURL:   testAPIBaseURL,
+		BrokerTopic:  testBrokerTopic,
+	})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	broker := parseBrokerConfig(t, out)["broker"].(map[string]any)
-	g.Expect(broker["type"]).To(Equal(string(BrokerTypeGooglePubSub)))
-	g.Expect(broker).NotTo(HaveKey("rabbitmq"))
-
-	ps := broker["googlepubsub"].(map[string]any)
-	g.Expect(ps["project_id"]).To(Equal("my-project"))
-	g.Expect(ps["create_topic_if_missing"]).To(BeFalse())
-}
-
-func TestRenderBrokerConfigGooglePubSubRequiresProjectID(t *testing.T) {
-	g := NewWithT(t)
-
-	t.Setenv(BrokerGooglePubSubProjectIDEnv, "")
-
-	_, err := renderBrokerConfig(BrokerTypeGooglePubSub)
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring(BrokerGooglePubSubProjectIDEnv))
-}
-
-func TestRenderBrokerConfigUnknownType(t *testing.T) {
-	g := NewWithT(t)
-
-	_, err := renderBrokerConfig("broker-nonexistent-type")
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("broker-nonexistent-type"))
+	g.Expect(out).To(HavePrefix("# Sentinel configuration"))
+	g.Expect(out).To(ContainSubstring("resource_type: " + testResourceType))
+	g.Expect(out).To(ContainSubstring("base_url: " + testAPIBaseURL))
+	g.Expect(out).To(ContainSubstring("topic: " + testBrokerTopic))
+	g.Expect(out).To(ContainSubstring("name: " + ResourceName(testResourceType)))
+	g.Expect(out).To(ContainSubstring("poll_interval: 5s"))
+	g.Expect(out).To(ContainSubstring("level: info"))
+	g.Expect(out).To(ContainSubstring("format: json"))
+	g.Expect(out).To(ContainSubstring("version: v1"))
+	g.Expect(out).To(ContainSubstring("timeout: 10s"))
+	g.Expect(out).To(ContainSubstring("is_new_resource"))
+	g.Expect(out).To(ContainSubstring("generation_mismatch"))
+	g.Expect(out).To(ContainSubstring("reconciled_and_stale"))
 }
 
 func TestRenderConfigIsDeterministic(t *testing.T) {
 	g := NewWithT(t)
 
 	in := configInput{
-		ResourceType: "clusters",
-		APIBaseURL:   "http://hyperfleet-api:8000",
-		BrokerTopic:  "hyperfleet-system-clusters",
+		ResourceType: testResourceType,
+		APIBaseURL:   testAPIBaseURL,
+		BrokerTopic:  testBrokerTopic,
 	}
-
-	first, err := renderConfig(in)
+	out1, err := renderConfig(in)
 	g.Expect(err).NotTo(HaveOccurred())
-	second, err := renderConfig(in)
+	out2, err := renderConfig(in)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(second).To(Equal(first))
-
-	g.Expect(first).To(HavePrefix(configHeader))
+	g.Expect(out1).To(Equal(out2))
 }
 
-func TestReferencedSecretsRabbitMQ(t *testing.T) {
+func TestRenderDefaultConfigIsValidYAML(t *testing.T) {
 	g := NewWithT(t)
 
-	c := &Component{Options: Options{BrokerType: BrokerTypeRabbitMQ}}
-	cr := &hyperfleetv1alpha1.HyperFleetConfig{}
+	out, err := renderConfig(configInput{
+		ResourceType: testResourceType,
+		APIBaseURL:   testAPIBaseURL,
+		BrokerTopic:  testBrokerTopic,
+	})
+	g.Expect(err).NotTo(HaveOccurred())
 
-	refs := c.ReferencedSecrets(cr)
-	g.Expect(refs).To(Equal([]component.SecretReference{
-		{Role: "broker", SecretName: BrokerSecretName},
-	}))
+	// Strip the comment header before unmarshaling.
+	body := out[strings.Index(out, "\n")+1:]
+	body = body[strings.Index(body, "\n")+1:]
+	var parsed sentinelConfig
+	g.Expect(yaml.Unmarshal([]byte(body), &parsed)).To(Succeed())
+
+	g.Expect(parsed.Sentinel.Name).To(Equal(ResourceName(testResourceType)))
+	g.Expect(parsed.ResourceType).To(Equal(testResourceType))
+	g.Expect(parsed.PollInterval).To(Equal("5s"))
+
+	g.Expect(parsed.Log.Level).To(Equal("info"))
+	g.Expect(parsed.Log.Format).To(Equal("json"))
+	g.Expect(parsed.Log.Output).To(Equal("stdout"))
+
+	g.Expect(parsed.Clients.HyperFleetAPI.BaseURL).To(Equal(testAPIBaseURL))
+	g.Expect(parsed.Clients.HyperFleetAPI.Version).To(Equal("v1"))
+	g.Expect(parsed.Clients.HyperFleetAPI.Timeout).To(Equal("10s"))
+	g.Expect(parsed.Clients.Broker.Topic).To(Equal(testBrokerTopic))
+
+	g.Expect(parsed.MessageDecision.Params).NotTo(BeEmpty())
+	g.Expect(parsed.MessageDecision.Result).To(ContainSubstring("is_new_resource"))
+	g.Expect(parsed.MessageData.ID).To(Equal("resource.id"))
+	g.Expect(parsed.MessageData.Kind).To(Equal("resource.kind"))
+	g.Expect(parsed.MessageData.Href).To(Equal("resource.href"))
+	g.Expect(parsed.MessageData.Generation).To(Equal("resource.generation"))
 }
 
-func TestReferencedSecretsGooglePubSub(t *testing.T) {
+// --- renderBrokerConfig tests ---
+
+func TestRenderBrokerConfigRabbitMQ(t *testing.T) {
 	g := NewWithT(t)
 
-	c := &Component{Options: Options{BrokerType: BrokerTypeGooglePubSub}}
-	cr := &hyperfleetv1alpha1.HyperFleetConfig{}
+	out, err := renderBrokerConfig(&BrokerInfo{Type: BrokerTypeRabbitMQ})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(out).To(HavePrefix("# Broker configuration"))
+	g.Expect(out).To(ContainSubstring("type: rabbitmq"))
+	g.Expect(out).To(ContainSubstring("exchange_type: topic"))
+	g.Expect(out).NotTo(ContainSubstring("googlepubsub"))
+}
 
-	refs := c.ReferencedSecrets(cr)
-	g.Expect(refs).To(BeEmpty())
+func TestRenderBrokerConfigGooglePubSub(t *testing.T) {
+	g := NewWithT(t)
+
+	out, err := renderBrokerConfig(&BrokerInfo{
+		Type:      BrokerTypeGooglePubSub,
+		ProjectID: "my-gcp-project",
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(out).To(ContainSubstring("type: googlepubsub"))
+	g.Expect(out).To(ContainSubstring("project_id: my-gcp-project"))
+	g.Expect(out).To(ContainSubstring("create_topic_if_missing: false"))
+	g.Expect(out).NotTo(ContainSubstring("rabbitmq"))
+}
+
+func TestRenderBrokerConfigGooglePubSubMissingProjectID(t *testing.T) {
+	g := NewWithT(t)
+
+	_, err := renderBrokerConfig(&BrokerInfo{Type: BrokerTypeGooglePubSub})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring(BrokerGooglePubSubProjectIDEnv))
+}
+
+func TestRenderBrokerConfigUnknownTypeErrors(t *testing.T) {
+	g := NewWithT(t)
+
+	_, err := renderBrokerConfig(&BrokerInfo{Type: BrokerType("unknown-broker")})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("unknown"))
+}
+
+func TestRenderBrokerConfigIsDeterministic(t *testing.T) {
+	g := NewWithT(t)
+
+	info := &BrokerInfo{Type: BrokerTypeRabbitMQ}
+	out1, err := renderBrokerConfig(info)
+	g.Expect(err).NotTo(HaveOccurred())
+	out2, err := renderBrokerConfig(info)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(out1).To(Equal(out2))
+}
+
+func TestRenderBrokerConfigGooglePubSubIsValidYAML(t *testing.T) {
+	g := NewWithT(t)
+
+	out, err := renderBrokerConfig(&BrokerInfo{
+		Type:      BrokerTypeGooglePubSub,
+		ProjectID: "my-gcp-project",
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Strip the 2-line header.
+	lines := strings.SplitN(out, "\n", 3)
+	var parsed brokerFileDocument
+	g.Expect(yaml.Unmarshal([]byte(lines[2]), &parsed)).To(Succeed())
+	g.Expect(parsed.Broker.Type).To(Equal(BrokerTypeGooglePubSub))
+	g.Expect(parsed.Broker.GooglePubSub).NotTo(BeNil())
+	g.Expect(parsed.Broker.GooglePubSub.ProjectID).To(Equal("my-gcp-project"))
+	g.Expect(parsed.Broker.GooglePubSub.CreateTopicIfMissing).To(BeFalse())
+	g.Expect(parsed.Broker.RabbitMQ).To(BeNil())
+}
+
+func TestRenderBrokerConfigRabbitMQIsValidYAML(t *testing.T) {
+	g := NewWithT(t)
+
+	out, err := renderBrokerConfig(&BrokerInfo{Type: BrokerTypeRabbitMQ})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Strip the 2-line header.
+	lines := strings.SplitN(out, "\n", 3)
+	var parsed brokerFileDocument
+	g.Expect(yaml.Unmarshal([]byte(lines[2]), &parsed)).To(Succeed())
+	g.Expect(parsed.Broker.Type).To(Equal(BrokerTypeRabbitMQ))
+	g.Expect(parsed.Broker.RabbitMQ).NotTo(BeNil())
+	g.Expect(parsed.Broker.RabbitMQ.URL).NotTo(BeEmpty())
+	g.Expect(parsed.Broker.RabbitMQ.ExchangeType).To(Equal("topic"))
+	g.Expect(parsed.Broker.GooglePubSub).To(BeNil())
+}
+
+// --- brokerTopic tests ---
+
+func TestBrokerTopic(t *testing.T) {
+	g := NewWithT(t)
+
+	g.Expect(brokerTopic("hyperfleet-system", "clusters")).To(Equal("hyperfleet-system-clusters"))
+	g.Expect(brokerTopic("other-ns", "nodepools")).To(Equal("other-ns-nodepools"))
 }

@@ -64,9 +64,8 @@ type Config struct {
 	SentinelImage string
 	// Namespace is the operator's own namespace, where operands are created.
 	Namespace string
-	// BrokerType selects the Sentinel message broker backend. Read once from
-	// BROKER_TYPE in main.go.
-	BrokerType sentinel.BrokerType
+	// BrokerInfo contains information about the Sentinel message broker backend.
+	BrokerInfo *sentinel.BrokerInfo
 	// ResolvedJWKSURL is the JWKS URL the controller derived via OIDC discovery.
 	// It is threaded through to the API component, which needs it only when auth
 	// is enabled and the CR pins neither a JWKS URL nor a JWKS Secret. Empty
@@ -145,12 +144,14 @@ func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error
 
 	components := []Component{
 		api.New(cfg.APIImage, cfg.Namespace, api.Options{
-			Entities:        entities,
-			ResolvedJWKSURL: cfg.ResolvedJWKSURL,
+			Entities: entities,
 		}),
 	}
 
 	apiBaseUrl := api.ServiceURL(cfg.Namespace)
+	if cfg.BrokerInfo == nil {
+		return nil, fmt.Errorf("sentinel broker info is required")
+	}
 	// Add one sentinel instance per resource type
 	for _, resourceType := range entities {
 		components = append(components,
@@ -159,7 +160,7 @@ func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error
 				Namespace:    cfg.Namespace,
 				ResourceType: resourceType.Plural,
 				APIBaseURL:   apiBaseUrl,
-				BrokerType:   cfg.BrokerType,
+				BrokerInfo:   cfg.BrokerInfo,
 			}))
 	}
 
@@ -186,7 +187,7 @@ func Resolve(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error) {
 	return append(shared, bundleSpecific(b)...), nil
 }
 
-// SetResolvedJWKSURL sets the OIDC-discovered JWKS URL on the API component.
+// SetResolvedJWKSURL sets the OIDC-discovered JWKS URL on just the API component.
 // The controller calls this after bundle resolution but before Render, since
 // OIDC discovery is a network read that cannot happen at resolve time.
 func SetResolvedJWKSURL(components []Component, url string) {

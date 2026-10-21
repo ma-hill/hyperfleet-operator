@@ -492,12 +492,10 @@ func computeConfigHash(configYAML string, entries []hashEntry) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// stampConfigHash computes the rollout hash from the component's rendered
-// ConfigMaps plus the referenced-secret entries and writes it onto the
-// component's Deployment pod-template annotations. It uses the component's
-// RolloutTarget to find the right ConfigMaps and Deployment by name, so it
-// works for any component (HYPERFLEET-1673). Mutating the Deployment in place
-// is safe: the object was just rendered and has not yet been applied.
+// stampConfigHash computes a rollout hash from the component's rendered
+// ConfigMap data and the supplied hash entries, then writes it as a
+// pod-template annotation on the component's Deployment. A change in any
+// input produces a new hash, which triggers a rolling restart.
 func stampConfigHash(objs []client.Object, target component.RolloutTarget, entries []hashEntry) string {
 	var configYAMLs []string
 	for _, entry := range target.ConfigEntries {
