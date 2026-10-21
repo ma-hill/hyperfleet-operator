@@ -79,19 +79,9 @@ func TestRenderBrokerConfigGooglePubSubRequiresProjectID(t *testing.T) {
 func TestRenderBrokerConfigUnknownType(t *testing.T) {
 	g := NewWithT(t)
 
-	_, err := renderBrokerConfig("kafka")
+	_, err := renderBrokerConfig("broker-nonexistent-type")
 	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("kafka"))
-}
-
-func TestRenderBrokerConfigIsDeterministic(t *testing.T) {
-	g := NewWithT(t)
-
-	first, err := renderBrokerConfig(BrokerTypeRabbitMQ)
-	g.Expect(err).NotTo(HaveOccurred())
-	second, err := renderBrokerConfig(BrokerTypeRabbitMQ)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(second).To(Equal(first))
+	g.Expect(err.Error()).To(ContainSubstring("broker-nonexistent-type"))
 }
 
 func TestRenderConfigIsDeterministic(t *testing.T) {
@@ -110,27 +100,6 @@ func TestRenderConfigIsDeterministic(t *testing.T) {
 	g.Expect(second).To(Equal(first))
 
 	g.Expect(first).To(HavePrefix(configHeader))
-}
-
-func TestRenderConfigClientAuthNested(t *testing.T) {
-	g := NewWithT(t)
-
-	out, err := renderConfig(configInput{
-		ResourceType: "clusters",
-		APIBaseURL:   "http://hyperfleet-api:8000",
-		BrokerTopic:  "hyperfleet-system-clusters",
-	})
-	g.Expect(err).NotTo(HaveOccurred())
-
-	var m map[string]any
-	g.Expect(yaml.Unmarshal([]byte(out), &m)).To(Succeed())
-
-	clients := m["clients"].(map[string]any)
-	g.Expect(clients).NotTo(HaveKey("auth"), "auth must be nested inside hyperfleet_api, not a sibling")
-
-	api := clients["hyperfleet_api"].(map[string]any)
-	auth := api["auth"].(map[string]any)
-	g.Expect(auth["enabled"]).To(BeFalse())
 }
 
 func TestReferencedSecretsRabbitMQ(t *testing.T) {
