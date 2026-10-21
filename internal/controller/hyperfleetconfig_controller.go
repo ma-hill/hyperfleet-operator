@@ -202,6 +202,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		missingSecrets = append(missingSecrets, id)
 	}
 
+
 	// Resolve the JWKS URL. When auth is on and the CR pins neither a JWKS URL nor
 	// a JWKS Secret, this performs OIDC discovery — a network read, so it lives
 	// here rather than in the pure renderer. Empty otherwise.

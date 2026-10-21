@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -131,11 +132,12 @@ func rollupProgressing(componentConditions []metav1.Condition) metav1.Condition 
 func degradedCondition(missingSecrets []string, reconcileErr error) metav1.Condition {
 	switch {
 	case len(missingSecrets) > 0:
+		sorted := slices.Sorted(slices.Values(missingSecrets))
 		return metav1.Condition{
 			Type:    hyperfleetv1alpha1.ConditionDegraded,
 			Status:  metav1.ConditionTrue,
 			Reason:  hyperfleetv1alpha1.ReasonReferencedSecretMissing,
-			Message: "referenced secret(s) missing in the operator's namespace: " + strings.Join(missingSecrets, ", "),
+			Message: "referenced secret(s) missing in the operator's namespace: " + strings.Join(sorted, ", "),
 		}
 	case reconcileErr != nil:
 		return metav1.Condition{

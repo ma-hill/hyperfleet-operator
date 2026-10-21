@@ -442,6 +442,7 @@ type hashEntry struct {
 // payloads at all — only their metadata.
 func (r *HyperFleetConfigReconciler) resolveSecretEntries(ctx context.Context, refs []component.SecretReference) ([]hashEntry, error) {
 	entries := make([]hashEntry, 0, len(refs))
+	// iterate over the component's referenced Secrets,
 	for _, ref := range refs {
 		s := &corev1.Secret{}
 		key := types.NamespacedName{Name: ref.SecretName, Namespace: r.OperatorNamespace}

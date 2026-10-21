@@ -102,6 +102,24 @@ func TestAggregateStatusProgressingIsOrOverComponents(t *testing.T) {
 	g.Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
 }
 
+func TestAggregateStatusDegradedMessageIsDeterministic(t *testing.T) {
+	g := NewWithT(t)
+
+	cr1 := &hyperfleetv1alpha1.HyperFleetConfig{}
+	cr1.Generation = 1
+	aggregateStatus(cr1, nil, false, []string{"broker-credentials", "api-tls"}, nil)
+	msg1 := conditionByType(cr1, hyperfleetv1alpha1.ConditionDegraded).Message
+
+	cr2 := &hyperfleetv1alpha1.HyperFleetConfig{}
+	cr2.Generation = 1
+	aggregateStatus(cr2, nil, false, []string{"api-tls", "broker-credentials"}, nil)
+	msg2 := conditionByType(cr2, hyperfleetv1alpha1.ConditionDegraded).Message
+
+	g.Expect(msg1).To(Equal(msg2), "Degraded message must be identical regardless of input order")
+	g.Expect(msg1).To(ContainSubstring("api-tls, broker-credentials"),
+		"secrets must appear in sorted order")
+}
+
 func TestAggregateStatusDegradedPrecedence(t *testing.T) {
 	g := NewWithT(t)
 
