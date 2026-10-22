@@ -35,10 +35,24 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/bundle"
 	apicomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 	sentinelcomponent "github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
+
+// sentinelResourceTypes is the set of entity plurals for the cloud-capi bundle,
+// derived from bundle.CloudCAPIEntities so the specs track the same entity set
+// the operator renders sentinel instances for. deleteOperands and the
+// operand-set spec iterate over it.
+var sentinelResourceTypes = func() []string {
+	types := make([]string, 0,
+		len(bundle.CloudCAPIEntities))
+	for _, e := range bundle.CloudCAPIEntities {
+		types = append(types, e.Plural)
+	}
+	return types
+}()
 
 // Reconciler behavior specs (HYPERFLEET-1407). These run against envtest, which
 // is apiserver + etcd only: there is NO garbage-collection controller and NO
@@ -54,6 +68,7 @@ import (
 // operands explicitly. NotFound is a valid "already clean" outcome.
 func deleteOperands(ctx context.Context, namespace string) {
 	GinkgoHelper()
+
 	operands := make([]client.Object, 0, 6+5*len(sentinelResourceTypes))
 	operands = append(operands,
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: apicomponent.ResourceName, Namespace: namespace}},
@@ -78,13 +93,6 @@ func deleteOperands(ctx context.Context, namespace string) {
 			Expect(err).NotTo(HaveOccurred())
 		}
 	}
-}
-
-// sentinelResourceTypes mirrors the cloud-capi entity plurals used by
-// bundle.Resolve. Kept as a package-level slice so deleteOperands and the
-// operand-set spec can iterate without importing internal/bundle.
-var sentinelResourceTypes = []string{
-	"clusters", "nodepools", "channels", "versions", "wifconfigs",
 }
 
 var _ = Describe("HyperFleetConfig Controller", func() {
@@ -470,6 +478,148 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionProgressing).Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutComplete))
 	})
 
+	It("rolls only the components whose rendered ConfigMap changed", func() {
+		// api.auth.audience feeds only the API's config.yaml; sentinel config
+		// renders from the resource type, API URL, broker topic and the auth
+		// on/off switch, so changing the audience must leave every sentinel alone.
+		podHashes := func() (apiHash string, sentinelHashes map[string]string) {
+			GinkgoHelper()
+			dep := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
+			apiHash = dep.Spec.Template.Annotations[configHashAnnotation]
+			Expect(apiHash).NotTo(BeEmpty())
+
+			sentinelHashes = map[string]string{}
+			for _, rt := range sentinelResourceTypes {
+				sDep := &appsv1.Deployment{}
+				Expect(k8sClient.Get(ctx, operandKey(sentinelcomponent.ResourceName(rt)), sDep)).To(Succeed())
+				sentinelHashes[rt] = sDep.Spec.Template.Annotations[configHashAnnotation]
+				Expect(sentinelHashes[rt]).NotTo(BeEmpty())
+			}
+			return apiHash, sentinelHashes
+		}
+		configMapRVs := func() map[string]string {
+			GinkgoHelper()
+			rvs := map[string]string{}
+			cm := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, operandKey(apicomponent.ConfigMapName), cm)).To(Succeed())
+			rvs[apicomponent.ConfigMapName] = cm.ResourceVersion
+			for _, rt := range sentinelResourceTypes {
+				for _, name := range []string{sentinelcomponent.ConfigMapName(rt), sentinelcomponent.BrokerConfigMapName(rt)} {
+					Expect(k8sClient.Get(ctx, operandKey(name), cm)).To(Succeed())
+					rvs[name] = cm.ResourceVersion
+				}
+			}
+			return rvs
+		}
+
+		By("reconciling to stamp the initial hashes")
+		doReconcile()
+		apiBefore, sentinelsBefore := podHashes()
+		rvsBefore := configMapRVs()
+
+		By("changing the API auth audience and reconciling")
+		cr := getCR()
+		cr.Spec.API.Auth.Audience = testAudience + "-changed"
+		Expect(k8sClient.Update(ctx, cr)).To(Succeed())
+		doReconcile()
+
+		By("verifying only the API ConfigMap was rewritten and only the API rolled")
+		apiAfter, sentinelsAfter := podHashes()
+		rvsAfter := configMapRVs()
+		Expect(apiAfter).NotTo(Equal(apiBefore), "the API config changed and must roll")
+		Expect(sentinelsAfter).To(Equal(sentinelsBefore), "no sentinel config changed, so none may roll")
+		for name, rv := range rvsBefore {
+			if name == apicomponent.ConfigMapName {
+				Expect(rvsAfter[name]).NotTo(Equal(rv), "the API ConfigMap must be rewritten")
+			} else {
+				Expect(rvsAfter[name]).To(Equal(rv), "ConfigMap %q is unaffected and must not be rewritten", name)
+			}
+		}
+
+		By("reconciling with nothing changed: nothing rolls")
+		doReconcile()
+		apiFinal, sentinelsFinal := podHashes()
+		Expect(apiFinal).To(Equal(apiAfter))
+		Expect(sentinelsFinal).To(Equal(sentinelsAfter))
+	})
+
+	It("rolls only the components that reference a rotated secret", func() {
+		By("creating the API database secret and the sentinel broker secret")
+		dbSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testDBSecretName, Namespace: operatorNamespace},
+			Data: map[string][]byte{
+				apicomponent.SecretKeyDBHost:     []byte("db.example.com"),
+				apicomponent.SecretKeyDBPort:     []byte("5432"),
+				apicomponent.SecretKeyDBName:     []byte("hyperfleet"),
+				apicomponent.SecretKeyDBUser:     []byte("hyperfleet"),
+				apicomponent.SecretKeyDBPassword: []byte("original"),
+			},
+		}
+		brokerSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: sentinelcomponent.BrokerSecretName, Namespace: operatorNamespace},
+			Data:       map[string][]byte{"password": []byte("original")},
+		}
+		for _, s := range []*corev1.Secret{dbSecret, brokerSecret} {
+			Expect(k8sClient.Create(ctx, s)).To(Succeed())
+			DeferCleanup(func(ctx context.Context) {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, s))).To(Succeed())
+			}, ctx)
+		}
+
+		// podHashes returns the config-hash pod-template annotation of the API
+		// Deployment and of every sentinel Deployment, keyed by component.
+		podHashes := func() (apiHash string, sentinelHashes map[string]string) {
+			GinkgoHelper()
+			dep := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, operandKey(apicomponent.ResourceName), dep)).To(Succeed())
+			apiHash = dep.Spec.Template.Annotations[configHashAnnotation]
+			Expect(apiHash).NotTo(BeEmpty())
+
+			sentinelHashes = map[string]string{}
+			for _, rt := range sentinelResourceTypes {
+				sDep := &appsv1.Deployment{}
+				Expect(k8sClient.Get(ctx, operandKey(sentinelcomponent.ResourceName(rt)), sDep)).To(Succeed())
+				sentinelHashes[rt] = sDep.Spec.Template.Annotations[configHashAnnotation]
+				Expect(sentinelHashes[rt]).NotTo(BeEmpty())
+			}
+			return apiHash, sentinelHashes
+		}
+
+		By("reconciling to stamp the initial hashes")
+		doReconcile()
+		apiBefore, sentinelsBefore := podHashes()
+
+		By("rotating only the broker secret: every sentinel rolls, the API does not")
+		Expect(k8sClient.Get(ctx, operandKey(sentinelcomponent.BrokerSecretName), brokerSecret)).To(Succeed())
+		brokerSecret.Data["password"] = []byte("rotated")
+		Expect(k8sClient.Update(ctx, brokerSecret)).To(Succeed())
+
+		doReconcile()
+		apiAfterBroker, sentinelsAfterBroker := podHashes()
+		Expect(apiAfterBroker).To(Equal(apiBefore), "the API does not consume the broker secret")
+		for _, rt := range sentinelResourceTypes {
+			Expect(sentinelsAfterBroker[rt]).NotTo(Equal(sentinelsBefore[rt]),
+				"sentinel %q consumes the broker secret and must roll", rt)
+		}
+
+		By("rotating only the database secret: the API rolls, no sentinel does")
+		Expect(k8sClient.Get(ctx, operandKey(testDBSecretName), dbSecret)).To(Succeed())
+		dbSecret.Data[apicomponent.SecretKeyDBPassword] = []byte("rotated")
+		Expect(k8sClient.Update(ctx, dbSecret)).To(Succeed())
+
+		doReconcile()
+		apiAfterDB, sentinelsAfterDB := podHashes()
+		Expect(apiAfterDB).NotTo(Equal(apiAfterBroker), "the API consumes the database secret and must roll")
+		Expect(sentinelsAfterDB).To(Equal(sentinelsAfterBroker), "sentinels do not consume the database secret")
+
+		By("reconciling with nothing rotated: nothing rolls")
+		doReconcile()
+		apiFinal, sentinelsFinal := podHashes()
+		Expect(apiFinal).To(Equal(apiAfterDB))
+		Expect(sentinelsFinal).To(Equal(sentinelsAfterDB))
+	})
+
 	It("reports Progressing=True while a rollout to a new generation has not completed", func() {
 		doReconcile()
 
@@ -507,6 +657,66 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionAvailable).Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
 	})
 
+	It("reports Available=False naming the Sentinel when only one Sentinel Deployment goes down, and recovers", func() {
+		// nodepools is deliberately neither the first nor the API component, so the
+		// surfaced message can only come from that Sentinel's own condition.
+		const downType = "nodepools"
+
+		doReconcile()
+		markAllDeploymentsReady()
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
+
+		By("taking down one Sentinel while the API and the other Sentinels stay healthy")
+		patchDeploymentStatus(sentinelcomponent.ResourceName(downType), func(dep *appsv1.Deployment) {
+			dep.Status.AvailableReplicas = 0
+			dep.Status.ReadyReplicas = 0
+		})
+
+		doReconcile()
+		available := conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable)
+		Expect(available.Status).To(Equal(metav1.ConditionFalse))
+		Expect(available.Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+		Expect(available.Message).To(ContainSubstring("(" + downType + ")"))
+
+		By("restoring the Sentinel: Available recovers")
+		patchDeploymentStatus(sentinelcomponent.ResourceName(downType), func(dep *appsv1.Deployment) {
+			dep.Status.AvailableReplicas = 1
+			dep.Status.ReadyReplicas = 1
+		})
+
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("reports Progressing=True naming the Sentinel while only one Sentinel rollout has not completed", func() {
+		const laggingType = "nodepools"
+
+		doReconcile()
+		markAllDeploymentsReady()
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionFalse))
+
+		By("simulating a lagging rollout on one Sentinel while the API and the other Sentinels are caught up")
+		patchDeploymentStatus(sentinelcomponent.ResourceName(laggingType), func(dep *appsv1.Deployment) {
+			dep.Status.ObservedGeneration = dep.Generation - 1
+		})
+
+		doReconcile()
+		progressing := conditionByType(getCR(), hyperfleetv1alpha1.ConditionProgressing)
+		Expect(progressing.Status).To(Equal(metav1.ConditionTrue))
+		Expect(progressing.Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
+		Expect(progressing.Message).To(ContainSubstring("(" + laggingType + ")"))
+
+		By("catching the Sentinel up: Progressing clears")
+		patchDeploymentStatus(sentinelcomponent.ResourceName(laggingType), func(dep *appsv1.Deployment) {
+			dep.Status.ObservedGeneration = dep.Generation
+		})
+
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionProgressing).Status).To(Equal(metav1.ConditionFalse))
+	})
+
 	It("reports Degraded=True when a referenced Secret is missing", func() {
 		By("reconciling without creating the fixture's referenced secrets")
 		doReconcile()
@@ -516,6 +726,38 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Reason).To(Equal(hyperfleetv1alpha1.ReasonReferencedSecretMissing))
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Message).To(ContainSubstring("database"))
 		Expect(conditionByType(cr, hyperfleetv1alpha1.ConditionDegraded).Message).To(ContainSubstring("broker"))
+	})
+
+	It("lists missing secrets in sorted, deduplicated order in the Degraded message", func() {
+		const prefix = "referenced secret(s) missing in the operator's namespace: "
+
+		// Components resolve in order: API (database, jwks) first, then one sentinel
+		// per entity, each referencing the same broker secret. Gathered in that order
+		// the roles are "database, jwks, broker, broker, ...", so only sorting puts
+		// broker first and only deduplication keeps it from repeating.
+		By("reconciling with none of the referenced secrets present")
+		doReconcile()
+		degraded := conditionByType(getCR(), hyperfleetv1alpha1.ConditionDegraded)
+		Expect(degraded.Reason).To(Equal(hyperfleetv1alpha1.ReasonReferencedSecretMissing))
+		Expect(degraded.Message).To(Equal(prefix + "broker, database, jwks"))
+
+		By("reconciling again: the message is identical, not reshuffled")
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionDegraded).Message).To(Equal(degraded.Message))
+
+		By("creating the broker secret: it drops out and the remaining names stay sorted")
+		brokerSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: sentinelcomponent.BrokerSecretName, Namespace: operatorNamespace},
+			Data:       map[string][]byte{"password": []byte("x")},
+		}
+		Expect(k8sClient.Create(ctx, brokerSecret)).To(Succeed())
+		DeferCleanup(func(ctx context.Context) {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, brokerSecret))).To(Succeed())
+		}, ctx)
+
+		doReconcile()
+		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionDegraded).Message).
+			To(Equal(prefix + "database, jwks"))
 	})
 
 	It("reports Degraded=True with ReferencedSecretMissing, not ReconcileError, when OIDC discovery also fails with an empty cache", func() {

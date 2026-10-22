@@ -31,7 +31,7 @@ func TestEntitiesForBundleCloudCAPI(t *testing.T) {
 
 	ents, err := entitiesForBundle(hyperfleetv1alpha1.BundleCloudCAPI)
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(ents).To(Equal(cloudCAPIEntities))
+	g.Expect(ents).To(Equal(CloudCAPIEntities))
 	g.Expect(ents).NotTo(BeEmpty())
 
 	// Sanity: the cloud-capi set registers the core entities the API expects for
@@ -79,16 +79,16 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// 1 API + 5 sentinel instances (one per cloud-capi entity).
-	g.Expect(comps).To(HaveLen(1 + len(cloudCAPIEntities)))
+	g.Expect(comps).To(HaveLen(1 + len(CloudCAPIEntities)))
 
 	apiComp, ok := comps[0].(*api.Component)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(apiComp.Image).To(Equal("example.com/api:test"))
 	g.Expect(apiComp.Namespace).To(Equal("hyperfleet-system"))
-	g.Expect(apiComp.Entities).To(Equal(cloudCAPIEntities))
+	g.Expect(apiComp.Entities).To(Equal(CloudCAPIEntities))
 
-	expectedTypes := make([]string, len(cloudCAPIEntities))
-	for i, e := range cloudCAPIEntities {
+	expectedTypes := make([]string, len(CloudCAPIEntities))
+	for i, e := range CloudCAPIEntities {
 		expectedTypes[i] = e.Plural
 	}
 	for i, rt := range expectedTypes {
@@ -97,7 +97,6 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 		g.Expect(sc.ResourceType).To(Equal(rt))
 		g.Expect(sc.Image).To(Equal("example.com/sentinel:test"))
 		g.Expect(sc.Namespace).To(Equal("hyperfleet-system"))
-		g.Expect(sc.APIBaseURL).To(Equal(api.ServiceURL("hyperfleet-system")))
 		g.Expect(sc.BrokerInfo.Type).To(Equal(sentinel.BrokerTypeRabbitMQ))
 	}
 }

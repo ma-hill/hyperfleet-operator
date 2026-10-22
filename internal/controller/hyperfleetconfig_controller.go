@@ -41,6 +41,7 @@ import (
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/apply"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/bundle"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/metrics"
 )
@@ -178,6 +179,9 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		metrics.IncReconcileError("bundle")
 		return ctrl.Result{}, fmt.Errorf("resolve components: %w", err)
 	}
+
+	apiBaseURL := api.GetApiURL(cr)
+	bundle.SetAPIBaseURL(components, apiBaseURL)
 
 	// Read each component's referenced Secrets for the rollout hash and the
 	// Degraded condition. A rotation bumps resourceVersion, so without hashing

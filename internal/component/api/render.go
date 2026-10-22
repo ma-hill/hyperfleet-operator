@@ -104,24 +104,27 @@ const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 )
 
-func ServiceURL(namespace string) string {
-	return fmt.Sprintf("http://%s.%s.svc:%d", ResourceName, namespace, portHTTP)
-}
-
-// apiPortName returns the API container/Service port name: "https" when the CR
-// enables TLS on the API listener, "http" otherwise.
-func apiPortName(cr *hyperfleetv1alpha1.HyperFleetConfig) string {
-	if cr.Spec.API.TLS != nil {
+// apiScheme is the scheme the API listener serves: "https" when the CR enables
+// TLS, "http" otherwise. It is also the API container/Service port name, so the
+// URL and the port name can't disagree.
+func apiScheme(cr *hyperfleetv1alpha1.HyperFleetConfig) string {
+	if TLSEnabled(cr) {
 		return portNameHTTPS
 	}
 	return portNameHTTP
 }
 
-// apiAppProtocol returns the API Service port's appProtocol: "https"
-// when the listener serves TLS, nil otherwise.
+// GetApiURL is the in-namespace base URL clients (the Sentinels) use to reach
+// the API Service.
+func GetApiURL(cr *hyperfleetv1alpha1.HyperFleetConfig) string {
+	return fmt.Sprintf("%s://%s:%d", apiScheme(cr), ResourceName, portHTTP)
+}
+
+// apiAppProtocol is the API Service port's appProtocol: "https" when the
+// listener serves TLS, nil otherwise.
 func apiAppProtocol(cr *hyperfleetv1alpha1.HyperFleetConfig) *string {
-	if cr.Spec.API.TLS != nil {
-		return ptr.To(portNameHTTPS)
+	if TLSEnabled(cr) {
+		return new(portNameHTTPS)
 	}
 	return nil
 }
@@ -324,7 +327,7 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 						WorkingDir:      "/app",
 						Args:            []string{"serve"},
 						Ports: []corev1.ContainerPort{
-							{Name: apiPortName(cr), ContainerPort: portHTTP, Protocol: corev1.ProtocolTCP},
+							{Name: apiScheme(cr), ContainerPort: portHTTP, Protocol: corev1.ProtocolTCP},
 							{Name: portNameHealth, ContainerPort: portHealth, Protocol: corev1.ProtocolTCP},
 							{Name: portNameMetrics, ContainerPort: portMetrics, Protocol: corev1.ProtocolTCP},
 						},
@@ -364,7 +367,7 @@ func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace string
 // carries appProtocol: https only when TLS is enabled, so Kubernetes-aware
 // proxies and service meshes route with the right protocol.
 func service(cr *hyperfleetv1alpha1.HyperFleetConfig, namespace string) *corev1.Service {
-	apiPort := apiPortName(cr)
+	apiPort := apiScheme(cr)
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"},
 		ObjectMeta: metav1.ObjectMeta{

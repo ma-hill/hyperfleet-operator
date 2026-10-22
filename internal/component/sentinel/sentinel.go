@@ -26,6 +26,7 @@ import (
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 )
 
 // Options carries all construction inputs for a Sentinel component instance.
@@ -41,9 +42,13 @@ type Options struct {
 	ResourceType string
 	// APIBaseURL is the base URL of the API component this instance talks to.
 	APIBaseURL string
-	// BrokerType selects the message broker backend. Read once from BROKER_TYPE
-	// in main.go and threaded here via bundle.Config.
+	// BrokerInfo carries the selected message broker type and its
+	// settings (the Google Pub/Sub project ID when the type is
+	// googlepubsub). Read once from environment variables in main.go and
+	// threaded here via bundle.Config.
 	BrokerInfo *BrokerInfo
+	// ParentKind is set if ResourceType has a parent
+	ParentKind string
 }
 
 // Component renders one Sentinel instance, watching a single resource type. A
@@ -81,13 +86,15 @@ func (c *Component) Rollout() component.RolloutTarget {
 // RabbitMQ requires a credential Secret; it must be pre-created by the partner
 // (the operator references but never creates it). A rotation of the Secret
 // triggers a reconcile and rolls the Sentinel pods via the config hash.
-func (c *Component) ReferencedSecrets(_ *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference {
+func (c *Component) ReferencedSecrets(cr *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference {
+	refs := []component.SecretReference{}
 	if c.BrokerInfo.Type == BrokerTypeRabbitMQ {
-		return []component.SecretReference{
-			{Role: "broker", SecretName: BrokerSecretName},
-		}
+		refs = append(refs, component.SecretReference{
+			Role:       "broker",
+			SecretName: BrokerSecretName,
+		})
 	}
-	return nil
+	return refs
 }
 
 // Render returns this instance's operand set in dependency order. Pure: no
@@ -100,8 +107,10 @@ func (c *Component) Render(_ context.Context, cr *hyperfleetv1alpha1.HyperFleetC
 
 	configYAML, err := renderConfig(configInput{
 		ResourceType: c.ResourceType,
+		HasParent:    c.ParentKind != "",
 		APIBaseURL:   c.APIBaseURL,
 		BrokerTopic:  brokerTopic(c.Namespace, c.ResourceType),
+		AuthEnabled:  api.AuthEnabled(cr),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render sentinel config for %q: %w", c.ResourceType, err)
@@ -116,7 +125,7 @@ func (c *Component) Render(_ context.Context, cr *hyperfleetv1alpha1.HyperFleetC
 		configMap(cr.Name, c.Namespace, c.ResourceType, configYAML),
 		brokerConfigMap(cr.Name, c.Namespace, c.ResourceType, brokerYAML),
 		networkPolicy(cr.Name, c.Namespace, c.ResourceType),
-		deployment(cr.Name, c.Image, c.Namespace, c.ResourceType, c.BrokerInfo.Type),
+		deployment(cr, c.Image, c.Namespace, c.ResourceType, c.BrokerInfo.Type),
 	}, nil
 }
 

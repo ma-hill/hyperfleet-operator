@@ -29,9 +29,11 @@ Every component implements `internal/bundle.Component`:
 
 ```go
 type Component interface {
-    Name() string
-    Render(context.Context, *v1alpha1.HyperFleetConfig) ([]client.Object, error)
-    Conditions(context.Context, *v1alpha1.HyperFleetConfig, []client.Object) ([]metav1.Condition, error)
+	Name() string
+	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig)([]client.Object, error)
+	Conditions(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error)
+	Rollout() component.RolloutTarget
+	ReferencedSecrets(cr *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference
 }
 ```
 
@@ -47,6 +49,16 @@ from the supplied `applied` slice. It should return the component-level
 `Available` and `Progressing` observations needed by the controller's rollup and
 must use the published reason constants. Controller errors and missing Secret
 references are rolled into `Degraded` centrally.
+
+`Rollout` tells the controller which ConfigMaps feed the component's config-hash
+annotation and which Deployment carries it. A change to one of those ConfigMaps
+therefore rolls only the component that owns it.
+
+`ReferencedSecrets` returns a list of the Secrets that this component's pods
+consume. The controller computes a hash from them and writes it as an annotation
+in the Deployment's pod template (`spec.template.metadata.annotations`). When a
+Secret rotates, only the affected component's pods roll. If Secrets are missing,
+the missing Secrets are listed in the Degraded condition.
 
 ## Implementation sequence
 
@@ -107,16 +119,34 @@ namespaced list.
 
 ### 5. Integrate configuration and rollout behavior
 
-Identify every ConfigMap and Secret input that must restart pods when it
-changes. Missing Secrets must remain distinguishable from present-but-empty
-inputs, and sensitive values must not be copied into hashes, logs, metrics, or
-rendered nonsensitive configuration.
+A component opts into config-driven rollouts through two methods. The
+controller's `stampConfigHash` does the rest, driven entirely by what the
+component returns; no component names live in the controller.
 
-The current `stampConfigHash` implementation recognizes only the API
-component's well-known ConfigMap and Deployment names. A second configurable
-workload does **not** receive rollout annotations automatically. Generalize the
-rollout-hash contract and add cross-component tests instead of copying API names
-or assuming the current helper covers the new component.
+- `Rollout()` tells the controller which ConfigMaps feed the component's
+  config-hash annotation and which Deployment carries it, so a ConfigMap change
+  rolls only the component that owns it. It returns a `component.RolloutTarget`:
+  one `ConfigEntry` (ConfigMap name and data key) for every ConfigMap the
+  component's pods consume, plus the name of the Deployment to stamp. The
+  controller hashes each entry's rendered data and writes the result to that
+  Deployment's pod-template annotation `hyperfleet.redhat.com/config-hash`. A
+  ConfigMap left out of the entries can change without restarting the pods.
+- `ReferencedSecrets()` returns a `component.SecretReference` (a role and
+  the Secret name) for every Secret the pods consume, including conditional ones.
+  The controller folds each Secret's `resourceVersion` into that component's 
+  own hash, so a rotation rolls only the components that reference it.
+
+Constraints:
+
+- A missing Secret must stay distinguishable from a present but empty one.
+  `computeConfigHash` handles this; do not bypass it with a custom hash.
+- Hash only the `resourceVersion`. Never copy Secret values into hashes.
+- Cover the new component with tests: a change to each of its ConfigMaps rolls
+  only that component, a Secret rotation rolls only the components that
+  reference it, and a missing Secret is hashed as absent and reported as
+  Degraded. `TestStampConfigHash*` in `hyperfleetconfig_rollout_test.go` and the
+  rollout specs in `hyperfleetconfig_controller_test.go` are the models to
+  follow.
 
 ### 6. Define health and status rollup
 

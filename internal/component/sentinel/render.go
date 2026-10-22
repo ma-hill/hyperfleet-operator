@@ -33,6 +33,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
+
+	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 )
 
 const (
@@ -136,7 +139,7 @@ func containerSecurityContext() *corev1.SecurityContext {
 // broker URL comes from a Secret-sourced env var; Google Pub/Sub authenticates
 // via Workload Identity and needs no credential. The config-hash pod-template
 // annotation is added by the controller, not here.
-func deployment(crName, image, namespace, resourceType string, brokerType BrokerType) *appsv1.Deployment {
+func deployment(cr *hyperfleetv1alpha1.HyperFleetConfig, image, namespace, resourceType string, brokerType BrokerType) *appsv1.Deployment {
 	name := ResourceName(resourceType)
 
 	env := []corev1.EnvVar{
@@ -159,6 +162,7 @@ func deployment(crName, image, namespace, resourceType string, brokerType Broker
 		{Name: brokerConfigVolume, MountPath: brokerConfigMountPath, SubPath: BrokerConfigFileKey, ReadOnly: true},
 		{Name: tmpVolume, MountPath: "/tmp"},
 	}
+
 	volumes := []corev1.Volume{
 		{
 			Name: configVolume,
@@ -182,16 +186,42 @@ func deployment(crName, image, namespace, resourceType string, brokerType Broker
 		},
 	}
 
+	if api.AuthEnabled(cr) {
+		volumes = append(volumes, corev1.Volume{
+			Name: "hyperfleet-api-token",
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					DefaultMode: ptr.To[int32](0444),
+					Sources: []corev1.VolumeProjection{
+						{
+							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+								Audience:          cr.Spec.API.Auth.Audience,
+								ExpirationSeconds: ptr.To[int64](3600),
+								Path:              ServiceAccountTokenFileName,
+							},
+						},
+					},
+				},
+			},
+		})
+
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "hyperfleet-api-token",
+			MountPath: ServiceAccountTokenPath,
+			ReadOnly:  true,
+		})
+	}
+
 	return &appsv1.Deployment{
 		TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    labels(crName, resourceType),
+			Labels:    labels(cr.Name, resourceType),
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: ptr.To[int32](1),
-			Selector: &metav1.LabelSelector{MatchLabels: selectorLabels(crName, resourceType)},
+			Selector: &metav1.LabelSelector{MatchLabels: selectorLabels(cr.Name, resourceType)},
 			Strategy: appsv1.DeploymentStrategy{
 				Type: appsv1.RollingUpdateDeploymentStrategyType,
 				RollingUpdate: &appsv1.RollingUpdateDeployment{
@@ -200,7 +230,7 @@ func deployment(crName, image, namespace, resourceType string, brokerType Broker
 				},
 			},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels(crName, resourceType)},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels(cr.Name, resourceType)},
 				Spec: corev1.PodSpec{
 					// Sentinel never calls the Kubernetes API, so no
 					// service-account token is needed.

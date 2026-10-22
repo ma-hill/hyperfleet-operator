@@ -28,17 +28,17 @@ func TestRenderConfigDefaults(t *testing.T) {
 	g := NewWithT(t)
 
 	out, err := renderConfig(configInput{
-		ResourceType: testResourceType,
+		ResourceType: testClustersRt,
 		APIBaseURL:   testAPIBaseURL,
 		BrokerTopic:  testBrokerTopic,
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(out).To(HavePrefix("# Sentinel configuration"))
-	g.Expect(out).To(ContainSubstring("resource_type: " + testResourceType))
+	g.Expect(out).To(ContainSubstring("resource_type: " + testClustersRt))
 	g.Expect(out).To(ContainSubstring("base_url: " + testAPIBaseURL))
 	g.Expect(out).To(ContainSubstring("topic: " + testBrokerTopic))
-	g.Expect(out).To(ContainSubstring("name: " + ResourceName(testResourceType)))
+	g.Expect(out).To(ContainSubstring("name: " + ResourceName(testClustersRt)))
 	g.Expect(out).To(ContainSubstring("poll_interval: 5s"))
 	g.Expect(out).To(ContainSubstring("level: info"))
 	g.Expect(out).To(ContainSubstring("format: json"))
@@ -53,7 +53,7 @@ func TestRenderConfigIsDeterministic(t *testing.T) {
 	g := NewWithT(t)
 
 	in := configInput{
-		ResourceType: testResourceType,
+		ResourceType: testClustersRt,
 		APIBaseURL:   testAPIBaseURL,
 		BrokerTopic:  testBrokerTopic,
 	}
@@ -68,7 +68,7 @@ func TestRenderDefaultConfigIsValidYAML(t *testing.T) {
 	g := NewWithT(t)
 
 	out, err := renderConfig(configInput{
-		ResourceType: testResourceType,
+		ResourceType: testClustersRt,
 		APIBaseURL:   testAPIBaseURL,
 		BrokerTopic:  testBrokerTopic,
 	})
@@ -80,9 +80,15 @@ func TestRenderDefaultConfigIsValidYAML(t *testing.T) {
 	var parsed sentinelConfig
 	g.Expect(yaml.Unmarshal([]byte(body), &parsed)).To(Succeed())
 
-	g.Expect(parsed.Sentinel.Name).To(Equal(ResourceName(testResourceType)))
-	g.Expect(parsed.ResourceType).To(Equal(testResourceType))
+	g.Expect(parsed.Sentinel.Name).To(Equal(ResourceName(testClustersRt)))
+	g.Expect(parsed.ResourceType).To(Equal(testClustersRt))
 	g.Expect(parsed.PollInterval).To(Equal("5s"))
+
+	// Tracing must be rendered explicitly false: an omitted key (e.g. via
+	// omitempty) would fall back to the sentinel's built-in default of true
+	// and write spans to stdout, since no OTLP endpoint is deployed.
+	g.Expect(body).To(ContainSubstring("tracing_enabled: false"))
+	g.Expect(parsed.TracingEnabled).To(BeFalse())
 
 	g.Expect(parsed.Log.Level).To(Equal("info"))
 	g.Expect(parsed.Log.Format).To(Equal("json"))

@@ -42,12 +42,14 @@ import (
 //     server's current status (see internal/apply). This avoids giving every
 //     component its own client.Client and an extra round of API reads for state
 //     the controller already has. Consumed starting in HYPERFLEET-1409.
-//   - Rollout tells the controller which ConfigMap and Deployment carry the
-//     component's config-hash annotation, so stampConfigHash works for any
-//     component without hardcoding names (HYPERFLEET-1673).
-//   - ReferencedSecrets declares which Secrets this component's pods consume,
-//     so the controller scopes each component's rollout hash to only the
-//     Secrets that are consumed by the component.
+//   - Rollout tells the controller which ConfigMaps feed the component's
+//     config-hash annotation and which Deployment carries it, so a ConfigMap
+//     change rolls only the component that owns it. (HYPERFLEET-1673)
+//   - ReferencedSecrets declares the secrets that this component's pods consume. The
+//     controller folds each one's resourceVersion into that component's own
+//     config hash, so a secret rotation rolls only the components that
+//     reference it. A missing Secret is hashed as absent rather than
+//     failing the reconcile, and is reported through the Degraded condition.
 type Component interface {
 	Name() string
 	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]client.Object, error)
@@ -84,7 +86,7 @@ type Config struct {
 // rejecting this config at startup (UnmarshalExact). There is no automated
 // check across repos for this; it is a manual invariant to watch when either
 // side changes.
-var cloudCAPIEntities = []api.EntityDescriptor{
+var CloudCAPIEntities = []api.EntityDescriptor{
 	{
 		Kind:              "Cluster",
 		Plural:            "clusters",
@@ -121,7 +123,7 @@ var cloudCAPIEntities = []api.EntityDescriptor{
 func entitiesForBundle(b hyperfleetv1alpha1.BundleType) ([]api.EntityDescriptor, error) {
 	switch b {
 	case hyperfleetv1alpha1.BundleCloudCAPI:
-		return cloudCAPIEntities, nil
+		return CloudCAPIEntities, nil
 	case hyperfleetv1alpha1.BundleOnPremAgent:
 		// The on-prem/agent bundle's entity set is not yet defined. Until it is,
 		// resolving this bundle must fail rather than silently produce an API that
@@ -141,27 +143,30 @@ func sharedTier(b hyperfleetv1alpha1.BundleType, cfg Config) ([]Component, error
 	if err != nil {
 		return nil, err
 	}
+	// Capacity for the API plus one Sentinel per registered entity; append
+	// never grows the slice past this.
+	components := make([]Component, 0, 1+len(entities))
+	components = append(components, api.New(cfg.APIImage, cfg.Namespace, api.Options{
+		Entities: entities,
+	}))
 
-	components := []Component{
-		api.New(cfg.APIImage, cfg.Namespace, api.Options{
-			Entities: entities,
-		}),
-	}
-
-	apiBaseUrl := api.ServiceURL(cfg.Namespace)
 	if cfg.BrokerInfo == nil {
 		return nil, fmt.Errorf("sentinel broker info is required")
 	}
 	// Add one sentinel instance per resource type
-	for _, resourceType := range entities {
+	for _, rt := range entities {
+		opts := sentinel.Options{
+			Image:        cfg.SentinelImage,
+			Namespace:    cfg.Namespace,
+			ResourceType: rt.Plural,
+			BrokerInfo:   cfg.BrokerInfo,
+		}
+		if rt.ParentKind != "" {
+			opts.ParentKind = rt.ParentKind
+		}
+
 		components = append(components,
-			sentinel.New(sentinel.Options{
-				Image:        cfg.SentinelImage,
-				Namespace:    cfg.Namespace,
-				ResourceType: resourceType.Plural,
-				APIBaseURL:   apiBaseUrl,
-				BrokerInfo:   cfg.BrokerInfo,
-			}))
+			sentinel.New(opts))
 	}
 
 	return components, nil
@@ -195,6 +200,14 @@ func SetResolvedJWKSURL(components []Component, url string) {
 		if ac, ok := c.(*api.Component); ok {
 			ac.ResolvedJWKSURL = url
 			return
+		}
+	}
+}
+
+func SetAPIBaseURL(components []Component, url string) {
+	for _, c := range components {
+		if sc, ok := c.(*sentinel.Component); ok {
+			sc.APIBaseURL = url
 		}
 	}
 }

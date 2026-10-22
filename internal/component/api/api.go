@@ -159,6 +159,11 @@ func AuthEnabled(cr *hyperfleetv1alpha1.HyperFleetConfig) bool {
 	return e == nil || *e
 }
 
+// TLSEnabled reports whether the CR enables TLS on the API listener.
+func TLSEnabled(cr *hyperfleetv1alpha1.HyperFleetConfig) bool {
+	return cr.Spec.API.TLS != nil
+}
+
 // resolveJWKSource picks the single JWKS source for the config file: a mounted
 // CR Secret (a file path) when jwkCertSecretRef is set, else the
 // controller-supplied OIDC-discovered URL. It returns (url, file) with at most

@@ -49,3 +49,9 @@ const (
 	ConfigFileKey       = "config.yaml"
 	BrokerConfigFileKey = "broker.yaml"
 )
+
+const (
+	// Full path is /var/run/secrets/hyperfleet/api-token/token
+	ServiceAccountTokenFileName = "token"
+	ServiceAccountTokenPath     = "/var/run/secrets/hyperfleet/api-token"
+)

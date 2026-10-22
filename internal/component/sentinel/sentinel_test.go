@@ -31,11 +31,12 @@ import (
 )
 
 const (
-	testNamespace    = "hyperfleet-system"
-	testImage        = "example.com/hyperfleet-sentinel:test"
-	testResourceType = "clusters"
-	testAPIBaseURL   = "http://hyperfleet-api:8000"
-	testBrokerTopic  = "hyperfleet-system-clusters"
+	testNamespace   = "hyperfleet-system"
+	testImage       = "example.com/hyperfleet-sentinel:test"
+	testClustersRt  = "clusters"
+	testNodepoolsRt = "nodepools"
+	testAPIBaseURL  = "http://hyperfleet-api:8000"
+	testBrokerTopic = "hyperfleet-system-clusters"
 )
 
 func testOptions(brokerType BrokerType) Options {
@@ -46,7 +47,7 @@ func testOptions(brokerType BrokerType) Options {
 	return Options{
 		Image:        testImage,
 		Namespace:    testNamespace,
-		ResourceType: testResourceType,
+		ResourceType: testClustersRt,
 		APIBaseURL:   testAPIBaseURL,
 		BrokerInfo:   info,
 	}
@@ -110,11 +111,11 @@ func TestRollout(t *testing.T) {
 	c := New(testOptions(BrokerTypeRabbitMQ))
 	rt := c.Rollout()
 
-	g.Expect(rt.DeploymentName).To(Equal(ResourceName(testResourceType)))
+	g.Expect(rt.DeploymentName).To(Equal(ResourceName(testClustersRt)))
 	g.Expect(rt.ConfigEntries).To(HaveLen(2))
-	g.Expect(rt.ConfigEntries[0].ConfigMapName).To(Equal(ConfigMapName(testResourceType)))
+	g.Expect(rt.ConfigEntries[0].ConfigMapName).To(Equal(ConfigMapName(testClustersRt)))
 	g.Expect(rt.ConfigEntries[0].ConfigFileKey).To(Equal(ConfigFileKey))
-	g.Expect(rt.ConfigEntries[1].ConfigMapName).To(Equal(BrokerConfigMapName(testResourceType)))
+	g.Expect(rt.ConfigEntries[1].ConfigMapName).To(Equal(BrokerConfigMapName(testClustersRt)))
 	g.Expect(rt.ConfigEntries[1].ConfigFileKey).To(Equal(BrokerConfigFileKey))
 }
 
@@ -163,7 +164,7 @@ func TestRenderProducesTheOperandSet(t *testing.T) {
 
 	for _, o := range objs {
 		g.Expect(o.GetNamespace()).To(Equal(testNamespace))
-		g.Expect(o.GetLabels()).To(HaveKeyWithValue(labelComponent, componentName(testResourceType)))
+		g.Expect(o.GetLabels()).To(HaveKeyWithValue(labelComponent, componentName(testClustersRt)))
 		g.Expect(o.GetLabels()).To(HaveKeyWithValue(labelManagedBy, managedByOperator))
 		g.Expect(o.GetObjectKind().GroupVersionKind().Kind).NotTo(BeEmpty())
 		g.Expect(o.GetObjectKind().GroupVersionKind().Version).NotTo(BeEmpty())
@@ -184,7 +185,7 @@ func TestRenderErrorsOnEmptyImage(t *testing.T) {
 // probes, security context, and config volume mounts.
 func assertDeploymentCommon(g Gomega, dep *appsv1.Deployment) {
 	g.Expect(dep).NotTo(BeNil())
-	g.Expect(dep.Name).To(Equal(ResourceName(testResourceType)))
+	g.Expect(dep.Name).To(Equal(ResourceName(testClustersRt)))
 
 	spec := dep.Spec
 	g.Expect(spec.Replicas).To(HaveValue(BeEquivalentTo(1)))
@@ -193,7 +194,7 @@ func assertDeploymentCommon(g Gomega, dep *appsv1.Deployment) {
 		g.Expect(spec.Template.Labels).To(HaveKeyWithValue(k, v))
 	}
 
-	g.Expect(spec.Template.Spec.ServiceAccountName).To(Equal(ResourceName(testResourceType)))
+	g.Expect(spec.Template.Spec.ServiceAccountName).To(Equal(ResourceName(testClustersRt)))
 	g.Expect(spec.Template.Spec.AutomountServiceAccountToken).To(HaveValue(BeFalse()))
 	g.Expect(spec.Template.Spec.Containers).To(HaveLen(1))
 
@@ -221,10 +222,10 @@ func assertDeploymentCommon(g Gomega, dep *appsv1.Deployment) {
 
 	var mountedConfig, mountedBroker bool
 	for _, v := range spec.Template.Spec.Volumes {
-		if v.ConfigMap != nil && v.ConfigMap.Name == ConfigMapName(testResourceType) {
+		if v.ConfigMap != nil && v.ConfigMap.Name == ConfigMapName(testClustersRt) {
 			mountedConfig = true
 		}
-		if v.ConfigMap != nil && v.ConfigMap.Name == BrokerConfigMapName(testResourceType) {
+		if v.ConfigMap != nil && v.ConfigMap.Name == BrokerConfigMapName(testClustersRt) {
 			mountedBroker = true
 		}
 	}
@@ -238,7 +239,7 @@ func TestRenderDeploymentRabbitMQ(t *testing.T) {
 	objs, err := New(testOptions(BrokerTypeRabbitMQ)).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 
-	dep := findDeployment(objs, ResourceName(testResourceType))
+	dep := findDeployment(objs, ResourceName(testClustersRt))
 	assertDeploymentCommon(g, dep)
 
 	// RabbitMQ: broker Secret env var is injected and references the correct Secret.
@@ -257,14 +258,14 @@ func TestRenderDeploymentRabbitMQ(t *testing.T) {
 	g.Expect(envNames).To(HaveKey(brokerConfigEnv))
 
 	// Config ConfigMap
-	cm := findConfigMap(objs, ConfigMapName(testResourceType))
+	cm := findConfigMap(objs, ConfigMapName(testClustersRt))
 	g.Expect(cm).NotTo(BeNil())
 	g.Expect(cm.Data).To(HaveKey(ConfigFileKey))
 	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring("resource_type: clusters"))
 	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring(testAPIBaseURL))
 
 	// Broker ConfigMap
-	cm = findConfigMap(objs, BrokerConfigMapName(testResourceType))
+	cm = findConfigMap(objs, BrokerConfigMapName(testClustersRt))
 	g.Expect(cm).NotTo(BeNil())
 	g.Expect(cm.Data).To(HaveKey(BrokerConfigFileKey))
 	g.Expect(cm.Data[BrokerConfigFileKey]).To(ContainSubstring("type: rabbitmq"))
@@ -276,7 +277,7 @@ func TestRenderDeploymentGooglePubSub(t *testing.T) {
 	objs, err := New(testOptions(BrokerTypeGooglePubSub)).Render(context.Background(), testCR())
 	g.Expect(err).NotTo(HaveOccurred())
 
-	dep := findDeployment(objs, ResourceName(testResourceType))
+	dep := findDeployment(objs, ResourceName(testClustersRt))
 	assertDeploymentCommon(g, dep)
 
 	// Google Pub/Sub: broker config env is present, but no broker Secret env
@@ -291,14 +292,14 @@ func TestRenderDeploymentGooglePubSub(t *testing.T) {
 	g.Expect(envNames).NotTo(HaveKey(brokerSecretEnv))
 
 	// Config ConfigMap
-	cm := findConfigMap(objs, ConfigMapName(testResourceType))
+	cm := findConfigMap(objs, ConfigMapName(testClustersRt))
 	g.Expect(cm).NotTo(BeNil())
 	g.Expect(cm.Data).To(HaveKey(ConfigFileKey))
 	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring("resource_type: clusters"))
 	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring(testAPIBaseURL))
 
 	// Broker ConfigMap
-	cm = findConfigMap(objs, BrokerConfigMapName(testResourceType))
+	cm = findConfigMap(objs, BrokerConfigMapName(testClustersRt))
 	g.Expect(cm).NotTo(BeNil())
 	g.Expect(cm.Data[BrokerConfigFileKey]).To(ContainSubstring("type: googlepubsub"))
 	g.Expect(cm.Data[BrokerConfigFileKey]).To(ContainSubstring("project_id: test-project"))
@@ -333,7 +334,7 @@ func TestRenderNetworkPolicyDeniesIngress(t *testing.T) {
 
 	np, ok := byKind(objs)["NetworkPolicy"].(*networkingv1.NetworkPolicy)
 	g.Expect(ok).To(BeTrue())
-	g.Expect(np.Name).To(Equal(ResourceName(testResourceType)))
+	g.Expect(np.Name).To(Equal(ResourceName(testClustersRt)))
 	g.Expect(np.Spec.PolicyTypes).To(ConsistOf(networkingv1.PolicyTypeIngress))
 	g.Expect(np.Spec.Ingress).To(BeEmpty())
 }
@@ -346,7 +347,7 @@ func TestRenderServiceAccount(t *testing.T) {
 
 	sa, ok := byKind(objs)["ServiceAccount"].(*corev1.ServiceAccount)
 	g.Expect(ok).To(BeTrue())
-	g.Expect(sa.Name).To(Equal(ResourceName(testResourceType)))
+	g.Expect(sa.Name).To(Equal(ResourceName(testClustersRt)))
 	g.Expect(sa.Namespace).To(Equal(testNamespace))
 }
 
@@ -374,7 +375,7 @@ func TestConditionsNoDeployment(t *testing.T) {
 	byType := condMapByType(conds)
 	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
-	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Message).To(ContainSubstring(testResourceType))
+	g.Expect(byType[hyperfleetv1alpha1.ConditionAvailable].Message).To(ContainSubstring(testClustersRt))
 	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(byType[hyperfleetv1alpha1.ConditionProgressing].Reason).To(Equal(hyperfleetv1alpha1.ReasonRolloutInProgress))
 }
@@ -382,7 +383,7 @@ func TestConditionsNoDeployment(t *testing.T) {
 func TestConditionsZeroAvailableReplicas(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 1, 0, 0, 1)
+	dep := deploymentWithStatus(testClustersRt, 1, 1, 0, 0, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -394,7 +395,7 @@ func TestConditionsZeroAvailableReplicas(t *testing.T) {
 func TestConditionsPartiallyReady(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 2, 2, 1, 1, 1)
+	dep := deploymentWithStatus(testClustersRt, 2, 2, 1, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -407,7 +408,7 @@ func TestConditionsPartiallyReady(t *testing.T) {
 func TestConditionsFullyReadyAndStable(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -421,7 +422,7 @@ func TestConditionsFullyReadyAndStable(t *testing.T) {
 func TestConditionsScaledToZero(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 0, 0, 0, 0, 1)
+	dep := deploymentWithStatus(testClustersRt, 0, 0, 0, 0, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -433,7 +434,7 @@ func TestConditionsScaledToZero(t *testing.T) {
 func TestConditionsMidRollout(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 1, 1, 1, 2)
+	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 2)
 	dep.Status.ObservedGeneration = 1
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
@@ -446,7 +447,7 @@ func TestConditionsMidRollout(t *testing.T) {
 func TestConditionsRolloutStillProgressingWhileOldReplicasRemain(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 2, 1, 1, 1)
+	dep := deploymentWithStatus(testClustersRt, 1, 2, 1, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -458,7 +459,7 @@ func TestConditionsRolloutStillProgressingWhileOldReplicasRemain(t *testing.T) {
 func TestConditionsRolloutStillProgressingWhileUpdatedReplicasAreUnavailable(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 1, 0, 1, 1)
+	dep := deploymentWithStatus(testClustersRt, 1, 1, 0, 1, 1)
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
@@ -470,12 +471,12 @@ func TestConditionsRolloutStillProgressingWhileUpdatedReplicasAreUnavailable(t *
 func TestConditionsFindsDeploymentInMixedKindSlice(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 1)
 	applied := []client.Object{
-		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: ResourceName(testResourceType)}},
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapName(testResourceType)}},
-		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: BrokerConfigMapName(testResourceType)}},
-		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: ResourceName(testResourceType)}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: ResourceName(testClustersRt)}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapName(testClustersRt)}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: BrokerConfigMapName(testClustersRt)}},
+		&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: ResourceName(testClustersRt)}},
 		dep,
 	}
 
@@ -490,7 +491,7 @@ func TestConditionsFindsDeploymentInMixedKindSlice(t *testing.T) {
 func TestConditionsNilSpecReplicasDefaultsToOne(t *testing.T) {
 	g := NewWithT(t)
 
-	dep := deploymentWithStatus(testResourceType, 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(testClustersRt, 1, 1, 1, 1, 1)
 	dep.Spec.Replicas = nil
 
 	conds, err := New(testOptions(BrokerTypeRabbitMQ)).Conditions(context.Background(), testCR(), []client.Object{dep})
@@ -505,13 +506,13 @@ func TestConditionsMessageIncludesResourceType(t *testing.T) {
 	g := NewWithT(t)
 
 	opts := testOptions(BrokerTypeRabbitMQ)
-	opts.ResourceType = "nodepools"
+	opts.ResourceType = testNodepoolsRt
 
-	dep := deploymentWithStatus("nodepools", 1, 1, 1, 1, 1)
+	dep := deploymentWithStatus(testNodepoolsRt, 1, 1, 1, 1, 1)
 	conds, err := New(opts).Conditions(context.Background(), testCR(), []client.Object{dep})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	for _, c := range conds {
-		g.Expect(c.Message).To(ContainSubstring("nodepools"), "condition %s message should include resource type", c.Type)
+		g.Expect(c.Message).To(ContainSubstring(testNodepoolsRt), "condition %s message should include resource type", c.Type)
 	}
 }

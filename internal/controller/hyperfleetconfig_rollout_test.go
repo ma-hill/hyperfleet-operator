@@ -26,6 +26,7 @@ import (
 
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -487,6 +488,80 @@ func TestStampConfigHashSetsAnnotation(t *testing.T) {
 	objs3 := render()
 	stampConfigHash(objs3, apiTarget, []hashEntry{{id: dbSecretHashID, present: true, value: []byte("h2")}})
 	g.Expect(depOf(objs3).Spec.Template.Annotations[configHashAnnotation]).NotTo(Equal(got))
+}
+
+func TestStampConfigHashMultipleConfigMaps(t *testing.T) {
+	g := NewWithT(t)
+
+	const (
+		cmA       = "cm-a"
+		cmB       = "cm-b"
+		cmOther   = "cm-unrelated"
+		keyA      = "a.yaml"
+		keyB      = "b.yaml"
+		targetDep = "target"
+		bystander = "bystander"
+	)
+
+	target := component.RolloutTarget{
+		ConfigEntries: []component.ConfigEntry{
+			{ConfigMapName: cmA, ConfigFileKey: keyA},
+			{ConfigMapName: cmB, ConfigFileKey: keyB},
+		},
+		DeploymentName: targetDep,
+	}
+
+	// build renders a fresh object set: the two ConfigMaps the target hashes, an
+	// unrelated ConfigMap it does not, the target Deployment, and a bystander
+	// Deployment that must never be stamped.
+	build := func(dataA, dataB, dataOther string) []client.Object {
+		return []client.Object{
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmA}, Data: map[string]string{keyA: dataA}},
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmB}, Data: map[string]string{keyB: dataB}},
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: cmOther}, Data: map[string]string{"x": dataOther}},
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: targetDep}},
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: bystander}},
+		}
+	}
+	annotationOn := func(objs []client.Object, name string) (string, bool) {
+		for _, o := range objs {
+			if d, ok := o.(*appsv1.Deployment); ok && d.Name == name {
+				v, ok := d.Spec.Template.Annotations[configHashAnnotation]
+				return v, ok
+			}
+		}
+		return "", false
+	}
+	stamp := func(dataA, dataB, dataOther string) string {
+		objs := build(dataA, dataB, dataOther)
+		returned := stampConfigHash(objs, target, nil)
+		stamped, ok := annotationOn(objs, targetDep)
+		g.Expect(ok).To(BeTrue(), "the named Deployment must be annotated")
+		g.Expect(stamped).To(Equal(returned), "the annotation must carry the returned hash")
+		return stamped
+	}
+
+	base := stamp("a1", "b1", "o1")
+	g.Expect(base).To(HaveLen(64))
+
+	// The annotation lands only on the named Deployment.
+	objs := build("a1", "b1", "o1")
+	stampConfigHash(objs, target, nil)
+	_, ok := annotationOn(objs, bystander)
+	g.Expect(ok).To(BeFalse(), "a Deployment that is not the target must not be stamped")
+
+	// Re-stamping identical inputs is stable.
+	g.Expect(stamp("a1", "b1", "o1")).To(Equal(base))
+
+	// A change in either ConfigMap's data changes the hash.
+	g.Expect(stamp("a2", "b1", "o1")).NotTo(Equal(base), "first ConfigMap changed")
+	g.Expect(stamp("a1", "b2", "o1")).NotTo(Equal(base), "second ConfigMap changed")
+
+	// Moving content between the two ConfigMaps changes the hash.
+	g.Expect(stamp("b1", "a1", "o1")).NotTo(Equal(base))
+
+	// A ConfigMap outside the target's entries does not affect the hash.
+	g.Expect(stamp("a1", "b1", "o2")).To(Equal(base))
 }
 
 func TestMapSecretToConfig(t *testing.T) {
