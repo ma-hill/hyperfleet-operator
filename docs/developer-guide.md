@@ -137,43 +137,10 @@ cluster-scoped CR. `make run` executes the manager on the host; it does not
 create the namespace, database, credentials, issuer, or certificates. Apply a
 sample only after replacing its example values with reachable dependencies.
 
-### Running the manager in a cluster
+### Running the operator in a cluster
 
-To test the manager as an in-cluster Deployment without building an OLM bundle,
-first build and push an operator image to a registry the cluster can pull. Then
-use the direct-deployment target with explicit operator and API images:
-
-```sh
-make deploy \
-  RELATED_IMAGE_HYPERFLEET_OPERATOR=<operator-image> \
-  RELATED_IMAGE_HYPERFLEET_API=<api-image> \
-  RELATED_IMAGE_HYPERFLEET_SENTINEL=<sentinel-image> \
-
-kubectl rollout status deployment/hyperfleet-operator-controller-manager \
-  -n hyperfleet-system
-```
-
-`make deploy` renders `config/default` into `dist/install.yaml`, including the
-CRD, RBAC, manager Deployment, and metrics Service, then applies it. The
-deployment uses `hyperfleet-system` by default. This path does not provision
-dependency Secrets, a database, issuer, or certificates; create a configuration
-only after providing reachable dependencies.
-
-After creating those dependencies and replacing the sample's placeholder
-values, apply the example configuration:
-
-```sh
-kubectl apply -k config/samples/
-```
-
-To remove a local installation, delete the example resource first, then remove
-the CRD and manager:
-
-```sh
-kubectl delete -k config/samples/
-make uninstall
-make undeploy
-```
+See [Component Install Tracker](./component-install-tracker.md) for latest requirements
+regarding installation of operator.
 
 ## End-to-end tests
 

@@ -1,0 +1,27 @@
+# Selected by `make build-deployer` when BROKER_TYPE=googlepubsub. It adds the
+# Sentinel broker settings to the operator Deployment. With RabbitMQ (the
+# operator's default) this overlay is not used, so no broker variables are set.
+#
+# ${BROKER_GOOGLEPUBSUB_PROJECT_ID} is substituted by envsubst in the Makefile,
+# which refuses to build when it is empty.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- ../../default
+
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: BROKER_TYPE
+        value: googlepubsub
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: BROKER_GOOGLEPUBSUB_PROJECT_ID
+        value: ${BROKER_GOOGLEPUBSUB_PROJECT_ID}
+  target:
+    kind: Deployment
+    name: .*controller-manager
