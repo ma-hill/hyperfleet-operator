@@ -31,12 +31,16 @@ import (
 )
 
 const (
-	testNamespace   = "hyperfleet-system"
-	testImage       = "example.com/hyperfleet-sentinel:test"
-	testClustersRt  = "clusters"
-	testNodepoolsRt = "nodepools"
-	testAPIBaseURL  = "http://hyperfleet-api:8000"
-	testBrokerTopic = "hyperfleet-system-clusters"
+	testNamespace       = "hyperfleet-system"
+	testImage           = "example.com/hyperfleet-sentinel:test"
+	testClustersRt      = "clusters"
+	testNodepoolsRt     = "nodepools"
+	testVersionsRt      = "versions"
+	testWifconfigsRt    = "wifconfigs"
+	testChannelsRt      = "channels"
+	testHttpAPIBaseURL  = "http://hyperfleet-api:8000"
+	testHttpsAPIBaseURL = "https://hyperfleet-api:8000"
+	testBrokerTopic     = "hyperfleet-system-clusters"
 )
 
 func testOptions(brokerType BrokerType) Options {
@@ -48,7 +52,7 @@ func testOptions(brokerType BrokerType) Options {
 		Image:        testImage,
 		Namespace:    testNamespace,
 		ResourceType: testClustersRt,
-		APIBaseURL:   testAPIBaseURL,
+		APIBaseURL:   testHttpAPIBaseURL,
 		BrokerInfo:   info,
 	}
 }
@@ -262,7 +266,7 @@ func TestRenderDeploymentRabbitMQ(t *testing.T) {
 	g.Expect(cm).NotTo(BeNil())
 	g.Expect(cm.Data).To(HaveKey(ConfigFileKey))
 	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring("resource_type: clusters"))
-	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring(testAPIBaseURL))
+	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring(testHttpAPIBaseURL))
 
 	// Broker ConfigMap
 	cm = findConfigMap(objs, BrokerConfigMapName(testClustersRt))
@@ -296,7 +300,7 @@ func TestRenderDeploymentGooglePubSub(t *testing.T) {
 	g.Expect(cm).NotTo(BeNil())
 	g.Expect(cm.Data).To(HaveKey(ConfigFileKey))
 	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring("resource_type: clusters"))
-	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring(testAPIBaseURL))
+	g.Expect(cm.Data[ConfigFileKey]).To(ContainSubstring(testHttpAPIBaseURL))
 
 	// Broker ConfigMap
 	cm = findConfigMap(objs, BrokerConfigMapName(testClustersRt))

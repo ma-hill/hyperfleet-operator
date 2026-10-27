@@ -314,6 +314,13 @@ ifeq ($(strip $(BROKER_GOOGLEPUBSUB_PROJECT_ID)),)
 endif
 endif
 	@mkdir -p dist
+ifeq ($(BROKER_TYPE),googlepubsub)
+	@[[ "$$BROKER_GOOGLEPUBSUB_PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$$ ]] || { \
+		echo "Error: BROKER_GOOGLEPUBSUB_PROJECT_ID '$$BROKER_GOOGLEPUBSUB_PROJECT_ID' is not a valid GCP project ID:" \
+			"6-30 lowercase letters, digits, or hyphens; must start with a letter and end with a letter or digit"; \
+		exit 1; \
+	}
+endif
 	@$(KUSTOMIZE) build $(DEPLOYER_KUSTOMIZE_DIR) | envsubst > dist/install.yaml
 
 

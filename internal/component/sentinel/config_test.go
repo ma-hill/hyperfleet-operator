@@ -29,14 +29,14 @@ func TestRenderConfigDefaults(t *testing.T) {
 
 	out, err := renderConfig(configInput{
 		ResourceType: testClustersRt,
-		APIBaseURL:   testAPIBaseURL,
+		APIBaseURL:   testHttpAPIBaseURL,
 		BrokerTopic:  testBrokerTopic,
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(out).To(HavePrefix("# Sentinel configuration"))
 	g.Expect(out).To(ContainSubstring("resource_type: " + testClustersRt))
-	g.Expect(out).To(ContainSubstring("base_url: " + testAPIBaseURL))
+	g.Expect(out).To(ContainSubstring("base_url: " + testHttpAPIBaseURL))
 	g.Expect(out).To(ContainSubstring("topic: " + testBrokerTopic))
 	g.Expect(out).To(ContainSubstring("name: " + ResourceName(testClustersRt)))
 	g.Expect(out).To(ContainSubstring("poll_interval: 5s"))
@@ -54,7 +54,7 @@ func TestRenderConfigIsDeterministic(t *testing.T) {
 
 	in := configInput{
 		ResourceType: testClustersRt,
-		APIBaseURL:   testAPIBaseURL,
+		APIBaseURL:   testHttpAPIBaseURL,
 		BrokerTopic:  testBrokerTopic,
 	}
 	out1, err := renderConfig(in)
@@ -69,7 +69,7 @@ func TestRenderDefaultConfigIsValidYAML(t *testing.T) {
 
 	out, err := renderConfig(configInput{
 		ResourceType: testClustersRt,
-		APIBaseURL:   testAPIBaseURL,
+		APIBaseURL:   testHttpAPIBaseURL,
 		BrokerTopic:  testBrokerTopic,
 	})
 	g.Expect(err).NotTo(HaveOccurred())
@@ -94,7 +94,7 @@ func TestRenderDefaultConfigIsValidYAML(t *testing.T) {
 	g.Expect(parsed.Log.Format).To(Equal("json"))
 	g.Expect(parsed.Log.Output).To(Equal("stdout"))
 
-	g.Expect(parsed.Clients.HyperFleetAPI.BaseURL).To(Equal(testAPIBaseURL))
+	g.Expect(parsed.Clients.HyperFleetAPI.BaseURL).To(Equal(testHttpAPIBaseURL))
 	g.Expect(parsed.Clients.HyperFleetAPI.Version).To(Equal("v1"))
 	g.Expect(parsed.Clients.HyperFleetAPI.Timeout).To(Equal("10s"))
 	g.Expect(parsed.Clients.Broker.Topic).To(Equal(testBrokerTopic))
@@ -105,6 +105,39 @@ func TestRenderDefaultConfigIsValidYAML(t *testing.T) {
 	g.Expect(parsed.MessageData.Kind).To(Equal("resource.kind"))
 	g.Expect(parsed.MessageData.Href).To(Equal("resource.href"))
 	g.Expect(parsed.MessageData.Generation).To(Equal("resource.generation"))
+}
+
+func TestRenderConfigAPIClientAuth(t *testing.T) {
+	g := NewWithT(t)
+
+	// auth enabled and https api base url
+	out, err := renderConfig(configInput{
+		ResourceType: testClustersRt,
+		APIBaseURL:   testHttpsAPIBaseURL,
+		BrokerTopic:  testBrokerTopic,
+		AuthEnabled:  true,
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(out).To(ContainSubstring("auth:"))
+	g.Expect(out).To(ContainSubstring("token_path: /var/run/secrets/hyperfleet/api-token/token"))
+	g.Expect(out).To(ContainSubstring("scheme: Bearer"))
+	g.Expect(out).To(ContainSubstring("token_cache_ttl: 30s"))
+	g.Expect(out).To(ContainSubstring("base_url: " + testHttpsAPIBaseURL))
+
+	// auth disabled and http api base url
+	out, err = renderConfig(configInput{
+		ResourceType: testClustersRt,
+		APIBaseURL:   testHttpAPIBaseURL,
+		BrokerTopic:  testBrokerTopic,
+		AuthEnabled:  false,
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(out).To(ContainSubstring("base_url: " + testHttpAPIBaseURL))
+	g.Expect(out).NotTo(ContainSubstring("auth:"))
+	g.Expect(out).NotTo(ContainSubstring("token_path: /var/run/secrets/hyperfleet/api-token/token"))
+	g.Expect(out).NotTo(ContainSubstring("scheme: Bearer"))
+	g.Expect(out).NotTo(ContainSubstring("token_cache_ttl: 30s"))
+
 }
 
 // --- renderBrokerConfig tests ---
@@ -205,4 +238,82 @@ func TestBrokerTopic(t *testing.T) {
 
 	g.Expect(brokerTopic("hyperfleet-system", "clusters")).To(Equal("hyperfleet-system-clusters"))
 	g.Expect(brokerTopic("other-ns", "nodepools")).To(Equal("other-ns-nodepools"))
+}
+
+func TestConstructMessageDecisionClustersAndNodepools(t *testing.T) {
+	g := NewWithT(t)
+
+	check := func(md *messageDecisionConfig) {
+		g.Expect(md.Params[0].Name).To(Equal("ref_time"))
+		g.Expect(md.Params[0].Expr).To(Equal(`condition("Reconciled").last_updated_time`))
+
+		g.Expect(md.Params[1].Name).To(Equal("is_reconciled"))
+		g.Expect(md.Params[1].Expr).To(Equal(`condition("Reconciled").status == "True"`))
+
+		g.Expect(md.Params[2].Name).To(Equal("has_ref_time"))
+		g.Expect(md.Params[2].Expr).To(Equal(`ref_time != ""`))
+
+		g.Expect(md.Params[3].Name).To(Equal("is_new_resource"))
+		g.Expect(md.Params[3].Expr).To(Equal("resource.generation == 1 && !has_ref_time"))
+
+		g.Expect(md.Params[4].Name).To(Equal("generation_mismatch"))
+		g.Expect(md.Params[4].Expr).To(Equal(`resource.generation > condition("Reconciled").observed_generation`))
+
+		g.Expect(md.Params[5].Name).To(Equal("reconciled_and_stale"))
+		g.Expect(md.Params[5].Expr).To(Equal(`is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")`))
+
+		g.Expect(md.Params[6].Name).To(Equal("not_reconciled_and_debounced"))
+		g.Expect(md.Params[6].Expr).To(Equal(`!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("10s")`))
+	}
+
+	md, err := constructMessageDecision(testClustersRt)
+	g.Expect(err).NotTo(HaveOccurred())
+	check(md)
+
+	md, err = constructMessageDecision(testNodepoolsRt)
+	g.Expect(err).NotTo(HaveOccurred())
+	check(md)
+}
+
+func TestConstructMessageDecisionNonAdapterResources(t *testing.T) {
+	g := NewWithT(t)
+
+	check := func(md *messageDecisionConfig) {
+		g.Expect(md.Params).To(HaveLen(1))
+		g.Expect(md.Params[0].Name).To(Equal("recently_updated"))
+		g.Expect(md.Params[0].Expr).To(Equal(`now - timestamp(resource.updated_time) < duration("5m")`))
+		g.Expect(md.Result).To(Equal("recently_updated"))
+	}
+	md, err := constructMessageDecision(testVersionsRt)
+	g.Expect(err).NotTo(HaveOccurred())
+	check(md)
+
+	md, err = constructMessageDecision(testWifconfigsRt)
+	g.Expect(err).NotTo(HaveOccurred())
+	check(md)
+
+	md, err = constructMessageDecision(testChannelsRt)
+	g.Expect(err).NotTo(HaveOccurred())
+	check(md)
+}
+
+func TestConstructMessageDataWithAndWithoutParent(t *testing.T) {
+	g := NewWithT(t)
+
+	check := func(md *messageDataConfig) {
+		g.Expect(md.ID).To(Equal("resource.id"))
+		g.Expect(md.Kind).To(Equal("resource.kind"))
+		g.Expect(md.Href).To(Equal("resource.href"))
+		g.Expect(md.Generation).To(Equal("resource.generation"))
+	}
+	mdWithParent := constructMessageData(true)
+	check(mdWithParent)
+	g.Expect(mdWithParent.OwnerReferences).NotTo(BeNil())
+	g.Expect(mdWithParent.OwnerReferences.ID).To(Equal("resource.owner_references.id"))
+	g.Expect(mdWithParent.OwnerReferences.Href).To(Equal("resource.owner_references.href"))
+	g.Expect(mdWithParent.OwnerReferences.Kind).To(Equal("resource.owner_references.kind"))
+
+	mdWithoutParent := constructMessageData(false)
+	check(mdWithoutParent)
+	g.Expect(mdWithoutParent.OwnerReferences).To(BeNil())
 }

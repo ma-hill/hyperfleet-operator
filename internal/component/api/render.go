@@ -40,8 +40,6 @@ limitations under the License.
 package api
 
 import (
-	"fmt"
-
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -112,12 +110,6 @@ func apiScheme(cr *hyperfleetv1alpha1.HyperFleetConfig) string {
 		return portNameHTTPS
 	}
 	return portNameHTTP
-}
-
-// GetApiURL is the in-namespace base URL clients (the Sentinels) use to reach
-// the API Service.
-func GetApiURL(cr *hyperfleetv1alpha1.HyperFleetConfig) string {
-	return fmt.Sprintf("%s://%s:%d", apiScheme(cr), ResourceName, portHTTP)
 }
 
 // apiAppProtocol is the API Service port's appProtocol: "https" when the

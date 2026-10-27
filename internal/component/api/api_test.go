@@ -18,6 +18,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	. "github.com/onsi/gomega"
@@ -686,4 +687,19 @@ func TestRenderAPIPortAdvertisesListenerProtocol(t *testing.T) {
 	g.Expect(svc.Spec.Ports).To(HaveLen(3))
 	g.Expect(names).To(HaveKeyWithValue(int32(portHealth), portNameHealth))
 	g.Expect(names).To(HaveKeyWithValue(int32(portMetrics), portNameMetrics))
+}
+
+func TestAPIBaseURL(t *testing.T) {
+	g := NewWithT(t)
+
+	cr := testCR()
+	cr.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
+		SecretRef: hyperfleetv1alpha1.SecretReference{Name: testTLSSecret},
+	}
+	expected := fmt.Sprintf("https://%s:%d", ResourceName, portHTTP)
+	g.Expect(APIBaseURL(cr)).To(Equal(expected))
+
+	cr.Spec.API.TLS = nil
+	expected = fmt.Sprintf("http://%s:%d", ResourceName, portHTTP)
+	g.Expect(APIBaseURL(cr)).To(Equal(expected))
 }

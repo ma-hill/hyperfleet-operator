@@ -158,7 +158,10 @@ func renderConfig(in configInput) (string, error) {
 		}
 	}
 
-	msgDecision := constructMessageDecision(in.ResourceType)
+	msgDecision, err := constructMessageDecision(in.ResourceType)
+	if err != nil {
+		return "", fmt.Errorf("construct message decision: %w", err)
+	}
 	msgData := constructMessageData(in.HasParent)
 
 	cfg := sentinelConfig{
@@ -236,28 +239,32 @@ func constructMessageData(hasParent bool) (md *messageDataConfig) {
 	return
 }
 
-func constructMessageDecision(resourceType string) (md *messageDecisionConfig) {
-	md = &messageDecisionConfig{}
-	if resourceType == "nodepools" || resourceType == "clusters" {
-		md.Params = []messageDecisionParam{
-			{Name: "ref_time", Expr: `condition("Reconciled").last_updated_time`},
-			{Name: "is_reconciled", Expr: `condition("Reconciled").status == "True"`},
-			{Name: "has_ref_time", Expr: `ref_time != ""`},
-			{Name: "is_new_resource", Expr: "resource.generation == 1 && !has_ref_time"},
-			{Name: "generation_mismatch", Expr: `resource.generation > condition("Reconciled").observed_generation`},
-			{Name: "reconciled_and_stale", Expr: `is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")`},
-			{Name: "not_reconciled_and_debounced", Expr: `!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("10s")`},
-		}
-		md.Result = "is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced"
+// constructMessageDecision constructs the message_decision config for the given resource type.
+// It returns an error if the resource type is not supported.
+func constructMessageDecision(resourceType string) (*messageDecisionConfig, error) {
+	switch resourceType {
+	case "nodepools", "clusters":
+		return &messageDecisionConfig{
+			Params: []messageDecisionParam{
+				{Name: "ref_time", Expr: `condition("Reconciled").last_updated_time`},
+				{Name: "is_reconciled", Expr: `condition("Reconciled").status == "True"`},
+				{Name: "has_ref_time", Expr: `ref_time != ""`},
+				{Name: "is_new_resource", Expr: "resource.generation == 1 && !has_ref_time"},
+				{Name: "generation_mismatch", Expr: `resource.generation > condition("Reconciled").observed_generation`},
+				{Name: "reconciled_and_stale", Expr: `is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")`},
+				{Name: "not_reconciled_and_debounced", Expr: `!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("10s")`},
+			},
+			Result: "is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced",
+		}, nil
+	case "versions", "wifconfigs", "channels":
+		return &messageDecisionConfig{
+			Params: []messageDecisionParam{
+				{Name: "recently_updated", Expr: `now - timestamp(resource.updated_time) < duration("5m")`},
+			},
+			Result: "recently_updated",
+		}, nil
 	}
-	// non-adapter based resources
-	if resourceType == "versions" || resourceType == "wifconfigs" || resourceType == "channels" {
-		md.Params = []messageDecisionParam{
-			{Name: "recently_updated", Expr: `now - timestamp(resource.updated_time) < duration("5m")`},
-		}
-		md.Result = "recently_updated"
-	}
-	return
+	return nil, fmt.Errorf("no message_decision defined for resource type %q", resourceType)
 }
 
 // brokerTopic namespaces the topic by the operator's namespace so resource

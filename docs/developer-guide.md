@@ -41,8 +41,8 @@ devcontainer as a supported build environment for this branch.
 - [Repository layout](#repository-layout)
 - [Reconciliation model](#reconciliation-model)
 - [Local development workflow](#local-development-workflow)
-  - [Running the manager from the host](#running-the-manager-from-the-host)
-  - [Running the manager in a cluster](#running-the-manager-in-a-cluster)
+  - [Running the operator from the host](#running-the-operator-from-the-host)
+  - [Running the operator in a cluster](#running-the-operator-in-a-cluster)
 - [End-to-end tests](#end-to-end-tests)
 - [Generated and release-facing files](#generated-and-release-facing-files)
 - [Troubleshooting local development](#troubleshooting-local-development)
@@ -123,7 +123,7 @@ go test ./internal/bundle ./internal/component/api ./internal/apply
 Controller tests require envtest. Use `make test` rather than assuming locally
 installed Kubernetes control-plane binaries are compatible.
 
-### Running the manager from the host
+### Running the operator from the host
 
 With a usable current kubeconfig:
 
@@ -133,14 +133,14 @@ make run OPERATOR_NAMESPACE=hyperfleet-system
 ```
 
 The namespace must exist and must contain every Secret referenced by the
-cluster-scoped CR. `make run` executes the manager on the host; it does not
+cluster-scoped CR. `make run` executes the operator on the host; it does not
 create the namespace, database, credentials, issuer, or certificates. Apply a
 sample only after replacing its example values with reachable dependencies.
 
 ### Running the operator in a cluster
 
-See [Component Install Tracker](./component-install-tracker.md) for latest requirements
-regarding installation of operator.
+See [Component Install Tracker](component-install-tracker.md) for latest
+requirements regarding installation of operator.
 
 ## End-to-end tests
 

@@ -30,7 +30,7 @@ Every component implements `internal/bundle.Component`:
 ```go
 type Component interface {
 	Name() string
-	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig)([]client.Object, error)
+	Render(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig) ([]client.Object, error)
 	Conditions(ctx context.Context, cr *hyperfleetv1alpha1.HyperFleetConfig, applied []client.Object) ([]metav1.Condition, error)
 	Rollout() component.RolloutTarget
 	ReferencedSecrets(cr *hyperfleetv1alpha1.HyperFleetConfig) []component.SecretReference
