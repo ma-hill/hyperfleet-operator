@@ -256,6 +256,9 @@ func constructMessageDecision(resourceType string) (*messageDecisionConfig, erro
 			},
 			Result: "is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced",
 		}, nil
+	// For versions, wifconfigs, and channels, Sentinel publishes only when it evaluates the resource within five minutes of updated_time.
+	// If Sentinel cannot evaluate an update before that window expires, the update can go unpublished.
+	// This rule does not guarantee recovery of missed updates.
 	case "versions", "wifconfigs", "channels":
 		return &messageDecisionConfig{
 			Params: []messageDecisionParam{
