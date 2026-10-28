@@ -180,7 +180,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, fmt.Errorf("resolve components: %w", err)
 	}
 
-	apiBaseURL := api.APIBaseURL(cr)
+	apiBaseURL := api.APIBaseURL(cr, r.OperatorNamespace)
 	bundle.SetAPIBaseURL(components, apiBaseURL)
 
 	// Read each component's referenced Secrets for the rollout hash and the

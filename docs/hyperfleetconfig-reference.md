@@ -91,6 +91,20 @@ request fails with `Client sent an HTTP request to an HTTPS server`. With
 `spec.api.tls` unset, the ports keep their `http` names and no `appProtocol` is
 set, leaving plain-HTTP routing unchanged.
 
+Certificate hostname requirements: the Sentinels reach the API at its
+in-cluster Service DNS name, so the certificate in the `tls.secretRef` Secret
+must be valid for `hyperfleet-api.<operator-namespace>.svc`. A certificate
+whose SANs do not include that name fails TLS verification in the Sentinel
+clients.
+
+Known limitation (see HYPERFLEET-1678): the API certificate is commonly issued
+by a private CA (for example, cert-manager). The Sentinels currently have no
+way to load and trust a custom CA, so with a private-CA-issued certificate the
+Sentinel-to-API HTTPS connection fails certificate verification. Until
+Sentinel support for trusting a custom CA lands and is wired into the
+operator, `spec.api.tls` with a private CA is usable only for clients that
+already trust that CA.
+
 ### Referenced Secret contracts
 
 | Reference | Required Secret type | Required keys | Notes |

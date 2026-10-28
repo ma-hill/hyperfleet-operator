@@ -696,10 +696,10 @@ func TestAPIBaseURL(t *testing.T) {
 	cr.Spec.API.TLS = &hyperfleetv1alpha1.TLSSpec{
 		SecretRef: hyperfleetv1alpha1.SecretReference{Name: testTLSSecret},
 	}
-	expected := fmt.Sprintf("https://%s:%d", ResourceName, portHTTP)
-	g.Expect(APIBaseURL(cr)).To(Equal(expected))
+	expected := fmt.Sprintf("https://%s.hyperfleet-system.svc:%d", ResourceName, portHTTP)
+	g.Expect(APIBaseURL(cr, "hyperfleet-system")).To(Equal(expected))
 
 	cr.Spec.API.TLS = nil
-	expected = fmt.Sprintf("http://%s:%d", ResourceName, portHTTP)
-	g.Expect(APIBaseURL(cr)).To(Equal(expected))
+	expected = fmt.Sprintf("http://%s.hyperfleet-system.svc:%d", ResourceName, portHTTP)
+	g.Expect(APIBaseURL(cr, "hyperfleet-system")).To(Equal(expected))
 }
