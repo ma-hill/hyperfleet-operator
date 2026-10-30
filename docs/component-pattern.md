@@ -177,13 +177,18 @@ If the component has a container image, define one stable
 `RELATED_IMAGE_HYPERFLEET_<COMPONENT>` environment variable and trace it all the
 way through:
 
-1. Component default and environment-variable constant.
+1. Environment-variable constant, and a compiled-in default image. A component
+   may omit the default and fail on an empty image instead. Sentinel does: the
+   operator exits at startup when the variable is unset (`cmd/main.go`), and
+   `Render` returns an error on an empty image.
 2. `cmd/main.go`, reconciler fields, and `bundle.Config`.
 3. Makefile default/export and image/build targets.
 4. `config/manager/kustomization.yaml`.
 5. `config/manifests/dev/patch-images.yaml`.
 6. `config/manifests/prod/kustomization.yaml` and the generated CSV's
-   `spec.relatedImages`.
+   `spec.relatedImages`. operator-sdk generates `spec.relatedImages` from the
+   manager's `RELATED_IMAGE_*` environment variables, so the CSV base needs no
+   edit.
 7. Unit/e2e expectations and disconnected-delivery documentation where the
    release workflow changes.
 
@@ -192,11 +197,18 @@ environment variables. Inserting or reordering entries can patch the wrong
 array item while still producing valid YAML. Render and inspect both overlays;
 do not validate only the base.
 
+Each overlay `replace` writes a whole `{name, value}` object, so it discards
+whatever entry held that index, whatever its name. The overlays must therefore
+cover exactly the base's `RELATED_IMAGE_*` indices, though not necessarily in
+the base's order. Check the rendered environment by variable name, not by index.
+
 For production, related images must be digest-pinned and must match every
 operand image and every `RELATED_IMAGE_` value in the CSV. The validator under
-`validators/related-images` enforces that relationship. See the
-[OLM guide](olm.md) for the release command and cross-repository image nudge
-workflow.
+`validators/related-images` enforces that relationship. See
+[Adding a component image to the nudge chain](olm.md#adding-a-component-image-to-the-nudge-chain)
+for the cross-repository nudge workflow and
+[Merge order for a new component image](olm.md#merge-order-for-a-new-component-image)
+for the order to merge it in.
 
 ## Required verification
 

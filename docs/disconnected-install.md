@@ -46,13 +46,24 @@ package/channel. The example selects the channel head in that immutable catalog
 snapshot. Select a publisher-supported version range if you need older bundles
 or an upgrade path.
 
-Use `mirror.operators`. Do not enumerate the bundle, operator and API under
-`additionalImages`: that bypasses catalog bundle and related-image discovery.
-The catalog digest is the only release input to `oc-mirror`; it selects the OLM
-bundle and its related images. The repository CSV is not an installation input.
-List any dependent operator packages explicitly; `oc-mirror` does not infer
-inter-operator dependencies. Do not use `skipDependencies` or blocked-image
-filters to suppress required release content.
+Use `mirror.operators`. Do not enumerate the bundle, operator, API and Sentinel
+under `additionalImages`: that bypasses catalog bundle and related-image
+discovery. The catalog digest is the only release input to `oc-mirror`; it
+selects the OLM bundle and its related images. The repository CSV is not an
+installation input. List any dependent operator packages explicitly; `oc-mirror`
+does not infer inter-operator dependencies. Do not use `skipDependencies` or
+blocked-image filters to suppress required release content.
+
+A release bundle's `relatedImages` carries these repositories, all under
+`quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/`. Expect each of
+them in the mirror; `oc-mirror` discovers them from the catalog:
+
+- `hyperfleet-operator`: the operator manager.
+- `hyperfleet-api`: the API operand.
+- `hyperfleet-sentinel`: the Sentinel operand, one Deployment per resource type.
+
+The bundle pins each image by digest. Take the digests from the selected
+bundle, not from this guide.
 
 ## 2. Export and transfer
 
@@ -178,17 +189,71 @@ the generated InstallPlan and its selected CSV, then approve that specific plan.
 The bundle supports `AllNamespaces`; do not add `targetNamespaces` to this
 OperatorGroup.
 
-Create a valid HyperFleetConfig and its referenced Secrets, with reachable
-database and authentication services as required by that configuration. Confirm
-operator and API readiness and inspect pod events for failed pulls. Compare
-runtime images with the selected release bundle; multi-architecture image IDs
-may identify platform manifests beneath the declared image index.
+The operator never creates the Secrets that the HyperFleetConfig references.
+The [Component Install Tracker](component-install-tracker.md#required-objects)
+lists each required object with its name, keys and an example. Create them in
+`hyperfleet-system` before the HyperFleetConfig. This guide covers only what
+differs in a disconnected cluster:
 
-For the release installed by this guide, provide the database Secret referenced
-by `spec.api.database.secretRef.name`; database provisioning is outside this
-installation procedure. Its keys are `db.host`, `db.port`, `db.name`, `db.user`
-and `db.password`. Consult the API contract and installation documentation
-shipped with the selected release for its database requirements.
+- **Database.** Provide a PostgreSQL database and the Secret named by
+  `spec.api.database.secretRef.name`. Database provisioning is outside this
+  installation procedure.
+- **Broker.** The operator uses RabbitMQ unless its Deployment sets
+  `BROKER_TYPE=googlepubsub`. RabbitMQ needs a broker reachable from the
+  Sentinel pods and the Secret `hyperfleet-broker-credentials`, with key
+  `BROKER_RABBITMQ_URL`. The operator does not provision RabbitMQ. Google
+  Pub/Sub does not work in a fully air-gapped cluster: Sentinel calls
+  `pubsub.googleapis.com` with Google credentials. If the cluster can reach
+  Google APIs, set `BROKER_TYPE=googlepubsub` and a valid
+  `BROKER_GOOGLEPUBSUB_PROJECT_ID` (the operator exits at startup otherwise),
+  and complete the [Google Pub/Sub](component-install-tracker.md#google-pubsub)
+  prerequisites.
+- **Authentication.** API authentication is enabled by default
+  (`spec.api.auth.enabled`). Without `jwkCertSecretRef`, the operator fetches
+  the issuer's OpenID discovery document. That fetch fails in an air-gapped
+  cluster. The operator also refuses an issuer that resolves to a private,
+  loopback, link-local or other non-public address, so an internal issuer on a
+  private address does not work either. Either set
+  `spec.api.auth.enabled: false`, or set `issuer` and `audience` and provide a
+  `jwks.json` Secret through `jwkCertSecretRef`. See
+  [Authentication and JWKS selection](hyperfleetconfig-reference.md#authentication-and-jwks-selection)
+  for the full contract.
+
+Create a valid HyperFleetConfig after its referenced Secrets, database and
+broker are ready. For the `cloud-capi` bundle in `hyperfleet-system`, confirm
+operator, API and all five Sentinel Deployments are created, then wait for
+availability. `oc wait --for=create` requires `oc` 4.18 or newer
+(Kubernetes 1.31+):
+
+```bash
+deployments=(
+  deployment/hyperfleet-operator-controller-manager
+  deployment/hyperfleet-api
+  deployment/hyperfleet-sentinel-clusters
+  deployment/hyperfleet-sentinel-nodepools
+  deployment/hyperfleet-sentinel-channels
+  deployment/hyperfleet-sentinel-versions
+  deployment/hyperfleet-sentinel-wifconfigs
+)
+rc=0
+for deployment in "${deployments[@]}"; do
+  oc wait --for=create --timeout=5m -n hyperfleet-system "$deployment" ||
+    { rc=1; break; }
+done
+oc wait --for=condition=Available --timeout=5m -n hyperfleet-system \
+  "${deployments[@]}" || rc=1
+oc get events -n hyperfleet-system \
+  --field-selector=involvedObject.kind=Pod,reason=Failed \
+  --sort-by=.lastTimestamp || rc=1
+(exit "$rc")
+```
+
+The events query runs even when a wait fails. The snippet's final status is
+nonzero if any wait or the events query fails. Inspect these events for failed
+image pulls, including when readiness times out. `reason=Failed` also matches
+other container errors, such as a missing Secret, and events from earlier pods.
+Compare runtime images with the selected release bundle; multi-architecture
+image IDs may identify platform manifests beneath the declared image index.
 
 Do not substitute `operator-sdk run bundle` for this installation path: its
 development catalog helpers are not the mirrored release catalog.

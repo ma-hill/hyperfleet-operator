@@ -15,6 +15,7 @@ This document covers the latest requirements and dependencies for the hyperfleet
 - [Component details](#component-details)
   - [API](#api)
   - [Sentinel](#sentinel)
+    - [Google Pub/Sub](#google-pubsub)
     - [Secrets](#secrets)
 - [Local Testing - Kind](#local-testing---kind)
   - [1. Create the cluster and namespace](#1-create-the-cluster-and-namespace)
@@ -87,9 +88,27 @@ make deploy RELATED_IMAGE_HYPERFLEET_OPERATOR=$OPERATOR_IMG \
   BROKER_TYPE=googlepubsub BROKER_GOOGLEPUBSUB_PROJECT_ID=<gcp-project-id>
 ```
 
+#### Google Pub/Sub
+
+With `BROKER_TYPE=googlepubsub`, the operator creates no Pub/Sub resources and
+mounts no Google credentials. Before you create the HyperFleetConfig:
+
+- Create one topic per resource type, named
+  `<operator namespace>-<resource type>`, for example
+  `hyperfleet-system-clusters`. Sentinel does not create topics.
+- Give the Sentinel pods Google Application Default Credentials through
+  workload identity for the ServiceAccounts
+  `hyperfleet-sentinel-<resource type>`. The operator sets no key file and no
+  `GOOGLE_APPLICATION_CREDENTIALS`.
+- Grant those ServiceAccounts `pubsub.topics.publish` on the topics and
+  `pubsub.topics.get` in the project. The Sentinel readiness check calls
+  `GetTopic`, so without `pubsub.topics.get` the pods never become ready.
+  `roles/pubsub.publisher` does not include `pubsub.topics.get`.
+- Let the Sentinel pods reach `pubsub.googleapis.com:443`.
+
 #### Secrets
 
-- `BROKER_TYPE=googlepubsub` does not require any additional secrets/configuration, but does require topic creation. 
+- `BROKER_TYPE=googlepubsub` needs no Secret; see [Google Pub/Sub](#google-pubsub).
 - `BROKER_TYPE=rabbitmq` requires a secret named `hyperfleet-broker-credentials` that contains the RabbitMQ url
 
 ```yaml

@@ -11,13 +11,49 @@ operator image ──nudge──▶ bundle image ──nudge──▶ catalog im
 1. **Operator image build** — Konflux builds and releases the operator image to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator`.
 
 2. **Nudge to bundle** — Konflux auto-merges the new operator image digest into `config/manifests/prod/kustomization.yaml`. This commit triggers the `operator-bundle-push` pipeline, which builds a new bundle image containing the updated operator reference.
-   > Updates to `RELATED_IMAGE_HYPERFLEET_API` also trigger this pipeline.
+   > Updates to `RELATED_IMAGE_HYPERFLEET_API` or `RELATED_IMAGE_HYPERFLEET_SENTINEL` also trigger this pipeline.
 
 3. **Nudge to catalog** — Konflux auto-merges the new bundle image digest into `catalog/konflux-template.yaml`. This commit triggers the `operator-catalog-push` pipeline. Its `run-opm-command` task renders the template into `catalog/hyperfleet-operator/catalog.yaml` before the image build, so [catalog.Dockerfile](../catalog.Dockerfile) only copies the rendered catalog and never pulls the bundle image. The pipeline then builds the catalog image and publishes it to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator-catalog`.
 
 > **Note**: Manual changes to [bundle.Dockerfile](../bundle.Dockerfile) or `config/manifests/prod/kustomization.yaml` will also trigger the bundle pipeline. Similarly, changes to [konflux-template.yaml](../catalog/konflux-template.yaml) or [catalog.Dockerfile](../catalog.Dockerfile) will trigger the catalog pipeline.
 
 > **TODO** - HYPERFLEET-1617 - Update documentation based on release details for the catalog. Currently no upgrade graph for the hyperfleet-operator.
+
+### Adding a component image to the nudge chain
+
+`hyperfleet-api` and `hyperfleet-sentinel` builds reach the bundle through the same nudge as the operator image. Adding a new operand image requires changes in this repository and konflux-release-data.
+
+1. **Prod overlay entry (this repository).** Wire `RELATED_IMAGE_HYPERFLEET_<COMPONENT>` through the code and overlays as [component pattern §8](component-pattern.md#8-add-the-image-and-related-image-plumbing) describes. In `config/manifests/prod/kustomization.yaml`, the entry's value is the component's services-prod image by digest, `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/<component>@sha256:<digest>`. Take the first digest from the component's latest released image: `skopeo inspect --override-os linux --override-arch amd64 docker://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/<component>:latest --format '{{.Digest}}'`. The override flags let the command run on macOS and on multi-architecture images. The services-prod image exists only after the ReleasePlanAdmission in step 2 maps the component and a release has run. The nudge rewrites that digest, so the entry must exist before the first nudge. The tenant's `namespace-wide-nudging-renovate-config.yaml` in konflux-release-data (`fileMatch`) lets nudges edit only `catalog/konflux-template.yaml` and `config/manifests/prod/kustomization.yaml`, so keep the digest in that kustomization.
+
+2. **Tenant nudge line (konflux-release-data).** In the GitLab repository `releng/konflux-release-data`, add `build-nudges-ref` to the component under `tenants-config/cluster/kflux-prd-rh02/tenants/hyperfleet-tenant/applications/hyperfleet/components/<component>.yaml`, matching `hyperfleet-api.yaml`:
+   ```yaml
+   spec:
+     build-nudges-ref:
+       - hyperfleet-operator-bundle
+   ```
+   Regenerate the manifests from `tenants-config/`, then commit the changes in both `cluster/` and `auto-generated/`:
+   ```bash
+   ./build-single.sh hyperfleet-tenant
+   git diff -- cluster auto-generated   # the build-nudges-ref addition, in the component and in its generated manifest
+   ```
+   The script needs `kustomize` (on your `PATH`, or pass its path as the second argument) and mikefarah `yq`.
+
+   The nudge carries the services-prod digest only if the `hyperfleet` application's ReleasePlanAdmission, `config/kflux-prd-rh02.0fk9.p1/service/ReleasePlanAdmission/hyperfleet/hyperfleet.yaml`, maps the component name to `quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/<component>`. Confirm the mapping is present and quote it in the merge request. If it is missing, add it: without the mapping the nudge does not update the services-prod reference.
+
+Follow [Merge order for a new component image](#merge-order-for-a-new-component-image), then verify that a successful component build opens a nudge pull request and that the `hyperfleet-operator-bundle-on-push` run on its merge commit passes.
+
+### Merge order for a new component image
+
+Nudge pull requests come from `red-hat-konflux-kflux-prd-rh02[bot]` with the `konflux-nudge` label. The Prow tide query for this repository (`core-services/prow/02_config/openshift-hyperfleet/hyperfleet-operator/_prowconfig.yaml` in `openshift/release`) merges them once the presubmits pass. There is no presubmit (pull request) Konflux pipeline, so the push build after the merge is the first place to check that the bundle build succeeds.
+
+Merge the two changes from [Adding a component image to the nudge chain](#adding-a-component-image-to-the-nudge-chain) in this order:
+
+1. The operator-repository change merges. The bundle built from that merge commit already lists the component's digest, but it still pins the previous operator digest, and that operator doesn't deploy the component.
+2. **Gate:** wait for the Konflux "Update hyperfleet-operator to …" nudge whose operator image was built from that merge commit or a later one, and let it merge. The title shows only a digest prefix; the first line of the pull request body names the source commit (`Image created from '…?rev=<sha>'`). To read it from the image instead: `skopeo inspect docker://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-operator@sha256:<digest> --format '{{index .Labels "vcs-ref"}}'`. The bundle then pins an operator image that deploys the component.
+3. The konflux-release-data merge request merges.
+4. The component's next build opens an "Update `<component>` to …" pull request, which auto-merges and triggers a bundle build whose CSV carries the new digest.
+
+Why the gate: the team rule is that a component nudges the bundle only if the operator can deploy it (HYPERFLEET-1665). Konflux does not check this; the merge order does. The nudge and the bundle build check image delivery, not runtime readiness. For that, follow the [disconnected installation guide](disconnected-install.md#4-install-through-olm).
 
 ## Developer Installation
 
@@ -43,19 +79,28 @@ For local development and installation, set your Quay username to automatically 
    ```
 3. **Build the bundle image:**
    ```bash
-   make bundle-build BUNDLE_IMG=... RELATED_IMAGE_HYPERFLEET_OPERATOR=... RELATED_IMAGE_HYPERFLEET_API=...
+   make bundle-build BUNDLE_IMG=... RELATED_IMAGE_HYPERFLEET_OPERATOR=... RELATED_IMAGE_HYPERFLEET_API=... RELATED_IMAGE_HYPERFLEET_SENTINEL=...
    # default BUNDLE_IMG=quay.io/$QUAY_USER/hyperfleet-operator-bundle:v$(VERSION)
-   # default RELATED_IMAGE_HYPERFLEET_OPERATOR=quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>
+   # default RELATED_IMAGE_HYPERFLEET_OPERATOR=quay.io/$QUAY_USER/hyperfleet-operator:$(IMG_TAG)
    # default RELATED_IMAGE_HYPERFLEET_API=quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-api:latest
+   # default RELATED_IMAGE_HYPERFLEET_SENTINEL=quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel:latest
    # default VERSION = 0.0.1
    ```
+   `bundle-build` writes the operator image reference
+   `quay.io/$QUAY_USER/hyperfleet-operator:$(IMG_TAG)` into the bundle. `IMG_TAG`
+   defaults to `APP_VERSION` (`git describe --tags --always --dirty`). Only
+   `image-dev` uses `dev-<git-sha>`. To bundle the image from step 2, pass the
+   same reference as `RELATED_IMAGE_HYPERFLEET_OPERATOR`. If you built step 2
+   with the default `OPERATOR_IMG`, `IMG_TAG=dev-$(git rev-parse --short HEAD)`
+   resolves to the same reference.
+
 5. **Push the bundle image:**
    ```bash
    make bundle-push BUNDLE_IMG=...
    ```
 
 **Image path defaults with QUAY_USER set:**
-- OPERATOR_IMG (hyperfleet-operator): `quay.io/$QUAY_USER/hyperfleet-operator:dev-<git-sha>`
+- OPERATOR_IMG (hyperfleet-operator): `quay.io/$QUAY_USER/hyperfleet-operator:$(IMG_TAG)` (`IMG_TAG` defaults to `APP_VERSION`; `image-dev` uses `dev-<git-sha>`)
 - BUNDLE_IMG (hyperfleet-operator-bundle): `quay.io/$QUAY_USER/hyperfleet-operator-bundle:v$(VERSION)` (default VERSION=0.0.1)
 - CATALOG_IMG (hyperfleet-operator-catalog): `quay.io/$QUAY_USER/hyperfleet-operator-catalog:v$(VERSION)` (defaul VERSION=0.0.1)
 
