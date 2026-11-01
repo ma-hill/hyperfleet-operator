@@ -167,7 +167,8 @@ intent, not a sizing guarantee.
 | Field | Meaning |
 |---|---|
 | `status.observedGeneration` | Latest `.metadata.generation` for which the operator completed component-health collection and status rollup. |
-| `status.conditions` | Map-like list keyed by condition `type`, using Kubernetes `metav1.Condition`. |
+| `status.conditions` | Map-like list keyed by condition `type`, using Kubernetes `metav1.Condition`. Carries the aggregated health of all bundle components. |
+| `status.components` | Map-like list keyed by component `name`, carrying the individual conditions observed for each bundle component. |
 
 ### Operator conditions versus API resource conditions
 
@@ -229,3 +230,25 @@ If reconciliation fails before component health can be checked, the operator
 does not invent new `Available` or `Progressing` values and does not advance the
 top-level `status.observedGeneration`. It re-evaluates only `Degraded` for the
 new generation, preserving the last actually observed component health.
+
+### Per-component conditions
+
+`status.components` carries the conditions of each bundle component under its
+name (e.g. `api` or `sentinel-clusters`), using the same `metav1.Condition`
+type and the same reason vocabulary as the top-level conditions, but scoped to
+that single component. Recognized types are `Available` and `Progressing`;
+`Degraded` is operator-level only, since components cannot observe
+controller-level failures such as a missing referenced Secret.
+
+The list is sorted by component name and rebuilt on every successful reconcile:
+an entry is removed when its component disappears from the bundle, and a
+condition type no longer reported by a component is dropped from its entry.
+Each condition's `observedGeneration` and `lastTransitionTime` follow the same
+semantics as the top-level conditions. Like the top-level `Available` and
+`Progressing`, per-component entries are left untouched when reconciliation
+fails before component health is collected. Consequently, a per-component
+condition's `observedGeneration` can be behind the current
+`.metadata.generation` after a failed reconcile — it is always in lockstep with
+`status.observedGeneration`, since both are updated together on a reconcile
+that collects component health. It catches up on the next reconcile that
+successfully collects that component's health.

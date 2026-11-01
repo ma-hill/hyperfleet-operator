@@ -27,7 +27,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -155,7 +154,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// per-component loop below completes without error; aggregateStatus uses it
 	// to avoid publishing a fabricated Available/Progressing value when the
 	// real state was never actually checked this reconcile.
-	var componentConditions []metav1.Condition
+	var componentConditions []hyperfleetv1alpha1.ComponentConditions
 	var componentsCollected bool
 	var missingSecrets []string
 	defer func() {
@@ -256,7 +255,23 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			metrics.IncReconcileError("conditions")
 			return ctrl.Result{}, fmt.Errorf("get conditions for component %q: %w", component.Name(), err)
 		}
-		componentConditions = append(componentConditions, conds...)
+		if len(conds) == 0 {
+			// A component reporting no conditions without an error violates the
+			// Conditions contract (docs/component-pattern.md requires at least
+			// an Available condition, and the bundle-wide test enforces it at
+			// implementation time). The rollup treats the component as absent
+			// and can optimistically report Available=True, so this log line is
+			// the only runtime signal that the component's health was never
+			// evaluated. Logged at info, not error, per the logging
+			// specification: this is a warning condition, not a failure, and
+			// error severity would trip error-level alerting.
+			log.Info("component reported no conditions; excluding it from the health rollup",
+				"component", component.Name())
+		}
+		componentConditions = append(componentConditions, hyperfleetv1alpha1.ComponentConditions{
+			Name:       component.Name(),
+			Conditions: conds,
+		})
 	}
 	componentsCollected = true
 

@@ -17,14 +17,26 @@ limitations under the License.
 package bundle
 
 import (
+	"context"
 	"testing"
 
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	hyperfleetv1alpha1 "github.com/openshift-hyperfleet/hyperfleet-operator/api/v1alpha1"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/api"
 	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/component/sentinel"
 )
+
+var testConfig = Config{
+	APIImage:      "test-quay.io/api:test",
+	SentinelImage: "test-quay.io/sentinel:test",
+	Namespace:     "hyperfleet-system",
+	BrokerInfo: &sentinel.BrokerInfo{
+		Type: sentinel.BrokerTypeRabbitMQ,
+	},
+}
 
 func TestEntitiesForBundleCloudCAPI(t *testing.T) {
 	g := NewWithT(t)
@@ -68,14 +80,7 @@ func TestEntitiesForBundleUnknownErrors(t *testing.T) {
 func TestResolveWiresSharedTierComponents(t *testing.T) {
 	g := NewWithT(t)
 
-	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
-		APIImage:      "example.com/api:test",
-		SentinelImage: "example.com/sentinel:test",
-		Namespace:     "hyperfleet-system",
-		BrokerInfo: &sentinel.BrokerInfo{
-			Type: sentinel.BrokerTypeRabbitMQ,
-		},
-	})
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, testConfig)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	// 1 API + 5 sentinel instances (one per cloud-capi entity).
@@ -83,7 +88,7 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 
 	apiComp, ok := comps[0].(*api.Component)
 	g.Expect(ok).To(BeTrue())
-	g.Expect(apiComp.Image).To(Equal("example.com/api:test"))
+	g.Expect(apiComp.Image).To(Equal("test-quay.io/api:test"))
 	g.Expect(apiComp.Namespace).To(Equal("hyperfleet-system"))
 	g.Expect(apiComp.Entities).To(Equal(CloudCAPIEntities))
 
@@ -95,7 +100,7 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 		sc, ok := comps[1+i].(*sentinel.Component)
 		g.Expect(ok).To(BeTrue(), "comps[%d] should be a sentinel.Component", 1+i)
 		g.Expect(sc.ResourceType).To(Equal(rt))
-		g.Expect(sc.Image).To(Equal("example.com/sentinel:test"))
+		g.Expect(sc.Image).To(Equal("test-quay.io/sentinel:test"))
 		g.Expect(sc.Namespace).To(Equal("hyperfleet-system"))
 		g.Expect(sc.BrokerInfo.Type).To(Equal(sentinel.BrokerTypeRabbitMQ))
 	}
@@ -104,12 +109,7 @@ func TestResolveWiresSharedTierComponents(t *testing.T) {
 func TestSetResolvedJWKSURL(t *testing.T) {
 	g := NewWithT(t)
 
-	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, Config{
-		APIImage:      "example.com/api:test",
-		SentinelImage: "example.com/sentinel:test",
-		Namespace:     "hyperfleet-system",
-		BrokerInfo:    &sentinel.BrokerInfo{Type: sentinel.BrokerTypeRabbitMQ},
-	})
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, testConfig)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	apiComp, ok := comps[0].(*api.Component)
@@ -124,7 +124,55 @@ func TestResolveOnPremAgentErrors(t *testing.T) {
 
 	// Resolving the on-prem/agent bundle must fail until it has a real entity
 	// set, not silently return an API component with no entities.
-	comps, err := Resolve(hyperfleetv1alpha1.BundleOnPremAgent, Config{Namespace: "ns"})
+	comps, err := Resolve(hyperfleetv1alpha1.BundleOnPremAgent, testConfig)
 	g.Expect(err).To(HaveOccurred())
 	g.Expect(comps).To(BeNil())
+}
+
+// TestEveryComponentReportsConditions is the implementation-time enforcement
+// of the Conditions() contract in docs/component-pattern.md: every component
+// in every resolvable bundle must return at least one condition when handed
+// its own freshly rendered objects — which carry no live status yet, so this
+// also proves the pessimistic path (health undeterminable) still reports
+// rather than returning empty. The runtime behavior for an empty report is
+// only a controller log line and an absent rollup entry, so a violation must
+// be caught here, at build time, not in a cluster.
+func TestEveryComponentReportsConditions(t *testing.T) {
+	g := NewWithT(t)
+
+	// A renderable CR: auth with a pinned JWKS cert Secret so nothing needs
+	// controller-supplied OIDC discovery.
+	cr := &hyperfleetv1alpha1.HyperFleetConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: hyperfleetv1alpha1.SingletonName},
+		Spec: hyperfleetv1alpha1.HyperFleetConfigSpec{
+			Bundle: hyperfleetv1alpha1.BundleCloudCAPI,
+			API: hyperfleetv1alpha1.APISpec{
+				Database: hyperfleetv1alpha1.DatabaseSpec{
+					SecretRef: hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-db"},
+				},
+				Auth: hyperfleetv1alpha1.AuthSpec{
+					Enabled:          ptr.To(true),
+					Issuer:           "https://issuer.example.com",
+					Audience:         "hyperfleet-api",
+					JWKCertSecretRef: &hyperfleetv1alpha1.SecretReference{Name: "hyperfleet-jwks"},
+				},
+			},
+		},
+	}
+
+	comps, err := Resolve(hyperfleetv1alpha1.BundleCloudCAPI, testConfig)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(comps).NotTo(BeEmpty())
+
+	ctx := context.Background()
+	for _, comp := range comps {
+		objs, err := comp.Render(ctx, cr)
+		g.Expect(err).NotTo(HaveOccurred(), "component %q must render", comp.Name())
+
+		conds, err := comp.Conditions(ctx, cr, objs)
+		g.Expect(err).NotTo(HaveOccurred(), "component %q Conditions must not error", comp.Name())
+		g.Expect(conds).NotTo(BeEmpty(),
+			"component %q must report at least one condition (an Available condition) even when health cannot be determined — see docs/component-pattern.md",
+			comp.Name())
+	}
 }

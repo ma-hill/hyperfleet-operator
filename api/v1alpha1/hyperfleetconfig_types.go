@@ -289,10 +289,35 @@ type HyperFleetConfigSpec struct {
 	API APISpec `json:"api"`
 }
 
+// ComponentConditions is the observed health of a single bundle component,
+// keyed by its name (e.g. "api" or "sentinel-clusters"). It carries the
+// conditions observed for that component during the most recent reconcile.
+type ComponentConditions struct {
+	// name is the identifier of the bundle component this entry
+	// describes, matching the component's Name() (e.g. "api" or
+	// "sentinel-clusters").
+	//
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// conditions are the current conditions for the component, updated after
+	// each reconcile. Recognized types are Available and Progressing. A
+	// condition's observedGeneration can lag behind the current
+	// .metadata.generation if the reconcile failed before component health
+	// was collected; such entries are left untouched until a later,
+	// successful reconcile.
+	//
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
 // HyperFleetConfigStatus defines the observed state of HyperFleetConfig. It is
 // populated by the bundle controller after every reconcile (HYPERFLEET-1409),
-// rolling up each component's health into the Available/Progressing/Degraded
-// conditions.
+// with the aggregated health of all bundle components in conditions and each
+// component's own conditions in components (HYPERFLEET-1653).
 type HyperFleetConfigStatus struct {
 	// observedGeneration is the .metadata.generation the operator last acted on.
 	//
@@ -300,13 +325,21 @@ type HyperFleetConfigStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// conditions represent the current installation health of the operand.
+	// conditions represent the aggregated health of all bundle components.
 	// Recognized types are Available, Progressing and Degraded.
 	//
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// components carry the individual conditions observed for each bundle
+	// component, keyed by the component's name.
+	//
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Components []ComponentConditions `json:"components,omitempty"`
 }
 
 // +kubebuilder:object:root=true

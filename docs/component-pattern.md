@@ -50,6 +50,15 @@ from the supplied `applied` slice. It should return the component-level
 must use the published reason constants. Controller errors and missing Secret
 references are rolled into `Degraded` centrally.
 
+`Conditions` must return at least one condition — normally `Available` — on
+every successful call, even when health cannot be determined (report a
+pessimistic `Available=False` with the published reason constants). A
+bundle-wide test enforces this at implementation time; at runtime the
+controller only logs a component that reports no conditions without an error,
+and the rollup then treats it as absent — which can report `Available=True`
+while that component's actual health is unknown — so an empty return is a
+contract violation, not a way to opt out of health reporting.
+
 `Rollout` tells the controller which ConfigMaps feed the component's config-hash
 annotation and which Deployment carries it. A change to one of those ConfigMaps
 therefore rolls only the component that owns it.
@@ -133,7 +142,7 @@ component returns; no component names live in the controller.
   ConfigMap left out of the entries can change without restarting the pods.
 - `ReferencedSecrets()` returns a `component.SecretReference` (a role and
   the Secret name) for every Secret the pods consume, including conditional ones.
-  The controller folds each Secret's `resourceVersion` into that component's 
+  The controller folds each Secret's `resourceVersion` into that component's
   own hash, so a rotation rolls only the components that reference it.
 
 Constraints:
