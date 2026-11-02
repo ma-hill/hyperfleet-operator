@@ -689,6 +689,56 @@ var _ = Describe("HyperFleetConfig Controller", func() {
 		Expect(conditionByType(getCR(), hyperfleetv1alpha1.ConditionAvailable).Status).To(Equal(metav1.ConditionTrue))
 	})
 
+	It("updates only the affected Sentinel's status.components entry, leaving other entries and their transition times untouched", func() {
+		// status.components is a nested listType=map (keyed by component name)
+		// inside a listType=map field on the CR. This spec proves the per-component
+		// split end-to-end through the real API server: a change to one operand
+		// rewrites only that component's entry, and an unaffected entry — including
+		// its LastTransitionTime — round-trips byte-for-byte. A fake client cannot
+		// prove this; only the real CRD schema validates the nested map structure.
+		const downType = "nodepools"
+		const otherType = "clusters"
+
+		By("reconciling until every component reports a stable healthy entry")
+		doReconcile()
+		markAllDeploymentsReady()
+		doReconcile()
+
+		// status.components entries are keyed by the component's Name()
+		// ("sentinel-<type>"), not the operand ResourceName.
+		entryName := func(resourceType string) string {
+			return sentinelcomponent.ComponentName + "-" + resourceType
+		}
+
+		// Baseline captured from the API server after the status round-trip.
+		apiBefore := componentConditionByType(getCR(), apicomponent.ComponentName, hyperfleetv1alpha1.ConditionAvailable)
+		otherBefore := componentConditionByType(getCR(), entryName(otherType), hyperfleetv1alpha1.ConditionAvailable)
+		Expect(apiBefore.Status).To(Equal(metav1.ConditionTrue))
+		Expect(otherBefore.Status).To(Equal(metav1.ConditionTrue))
+
+		By("taking down one Sentinel Deployment")
+		patchDeploymentStatus(sentinelcomponent.ResourceName(downType), func(dep *appsv1.Deployment) {
+			dep.Status.AvailableReplicas = 0
+			dep.Status.ReadyReplicas = 0
+		})
+
+		doReconcile()
+
+		By("asserting the taken-down Sentinel's entry flipped")
+		down := componentConditionByType(getCR(), entryName(downType), hyperfleetv1alpha1.ConditionAvailable)
+		Expect(down.Status).To(Equal(metav1.ConditionFalse))
+		Expect(down.Reason).To(Equal(hyperfleetv1alpha1.ReasonDeploymentUnavailable))
+
+		By("asserting the API entry and its lastTransitionTime are untouched")
+		apiAfter := componentConditionByType(getCR(), apicomponent.ComponentName, hyperfleetv1alpha1.ConditionAvailable)
+		Expect(apiAfter).To(Equal(apiBefore),
+			"the API operand did not change, so its entry — lastTransitionTime included — must round-trip unchanged")
+
+		By("asserting an untouched sibling Sentinel entry is also untouched")
+		otherAfter := componentConditionByType(getCR(), entryName(otherType), hyperfleetv1alpha1.ConditionAvailable)
+		Expect(otherAfter).To(Equal(otherBefore))
+	})
+
 	It("reports Progressing=True naming the Sentinel while only one Sentinel rollout has not completed", func() {
 		const laggingType = "nodepools"
 

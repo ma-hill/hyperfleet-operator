@@ -265,7 +265,7 @@ func (r *HyperFleetConfigReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// evaluated. Logged at info, not error, per the logging
 			// specification: this is a warning condition, not a failure, and
 			// error severity would trip error-level alerting.
-			log.Info("component reported no conditions; excluding it from the health rollup",
+			log.Info("component reported no conditions; excluding it",
 				"component", component.Name())
 		}
 		componentConditions = append(componentConditions, hyperfleetv1alpha1.ComponentConditions{
