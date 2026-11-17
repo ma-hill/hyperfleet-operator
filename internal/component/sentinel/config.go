@@ -107,6 +107,11 @@ type brokerFileConfig struct {
 	GooglePubSub *googlePubSubConfig `json:"googlepubsub,omitempty"`
 }
 
+// rabbitMQConfig renders URL as an empty key: the URL embeds credentials and
+// must not live in a ConfigMap, but hyperfleet-broker's viper AutomaticEnv
+// (with a "." to "_" key replacer) only overrides keys present in the config.
+// Registering the empty key lets the env var BROKER_RABBITMQ_URL from the secret
+// supply the runtime value for broker.rabbitmq.url.
 type rabbitMQConfig struct {
 	URL          string `json:"url"`
 	ExchangeType string `json:"exchange_type"`
@@ -203,7 +208,6 @@ func renderBrokerConfig(brokerInfo *BrokerInfo) (string, error) {
 	case BrokerTypeRabbitMQ:
 		cfg.Type = BrokerTypeRabbitMQ
 		cfg.RabbitMQ = &rabbitMQConfig{
-			URL:          "amqp://placeholder:placeholder@rabbitmq.placeholder.svc.cluster.local:5672/",
 			ExchangeType: brokerExchangeType,
 		}
 	default:

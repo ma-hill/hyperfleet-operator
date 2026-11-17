@@ -23,6 +23,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	_ "embed"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -47,7 +48,9 @@ const serviceAccountName = "hyperfleet-operator-controller-manager"
 
 const (
 	apiOperandName      = "hyperfleet-api"
+	apiConfigMapName    = "hyperfleet-api-config"
 	postgresOperandName = "hyperfleet-postgres"
+	rabbitmqOperandName = "hyperfleet-rabbitmq"
 )
 
 const (
@@ -76,58 +79,14 @@ const (
 	activeManagerPodsTemplate      = `go-template={{ range .items }}` +
 		`{{ if not .metadata.deletionTimestamp }}` +
 		`{{ .metadata.name }}{{ "\n" }}{{ end }}{{ end }}`
-	secureMetricsCurlCommand = `set -eu
-url=%q
-token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-curl --fail --show-error --silent --connect-timeout 5 --max-time 20 \
-  --retry 3 --retry-delay 2 --retry-all-errors --cacert /var/run/metrics/ca.crt \
-  --header "Authorization: Bearer $token" "$url"
-status=$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
-  --retry 3 --retry-delay 2 --output /dev/null --write-out '%%{http_code}' \
-  --cacert /var/run/metrics/ca.crt "$url")
-if [ "$status" != "401" ]; then
-  echo "expected unauthenticated metrics request to return HTTP 401, got $status" >&2
-  exit 1
-fi
-echo "unauthenticated metrics request rejected (HTTP 401)"
-# Tamper with the signed token to check that merely presenting a bearer token is insufficient.
-invalid_response_file=$(mktemp)
-trap 'rm -f "$invalid_response_file"' EXIT
-invalid_status=$(curl --silent --show-error --connect-timeout 5 --max-time 20 \
-  --retry 3 --retry-delay 2 --output "$invalid_response_file" --write-out '%%{http_code}' \
-  --cacert /var/run/metrics/ca.crt \
-  --header "Authorization: Bearer ${token}invalid" "$url")
-case "$invalid_status" in
-  4[0-9][0-9]|5[0-9][0-9]) ;;
-  *) echo "expected invalid bearer token to be rejected, got HTTP $invalid_status" >&2; exit 1 ;;
-esac
-# controller-runtime v0.25.2 returns 500 for the invalid-bearer-token error.
-# Do not accept a status alone: check the auth response here and the precise
-# authentication error in the fresh manager Pod's logs in the Go assertion.
-case "$(cat "$invalid_response_file")" in
-  "Authentication failed"|"Unauthorized") ;;
-  *) echo "invalid-token response was not an authentication failure" >&2; exit 1 ;;
-esac
-echo "invalid bearer token rejected (HTTP $invalid_status)"
-untrusted_exit=0
-curl --silent --connect-timeout 5 --max-time 20 --retry 3 --retry-delay 2 \
-  --output /dev/null \
-  --cacert /var/run/metrics/untrusted-ca.crt \
-  --header "Authorization: Bearer $token" "$url" || untrusted_exit=$?
-if [ "$untrusted_exit" -ne 60 ]; then
-  echo "expected untrusted metrics CA to fail TLS verification (curl exit 60), got $untrusted_exit" >&2
-  exit 1
-fi
-echo "untrusted metrics CA rejected (curl exit 60)"
-# Confirm that the endpoint still serves authenticated requests after the failures.
-curl --fail --show-error --silent --connect-timeout 5 --max-time 20 \
-  --retry 3 --retry-delay 2 --retry-all-errors --cacert /var/run/metrics/ca.crt \
-  --header "Authorization: Bearer $token" "$url"`
 )
+
+//go:embed secure_curl_command.txt
+var secureMetricsCurlCommand string
 
 const cleanupTimeout = 30 * time.Second
 
-var _ = Describe("Manager", Ordered, func() {
+var _ = Describe("hyperfleet-operator", Ordered, func() {
 	var controllerPodName string
 
 	// Before running the tests, set up the environment by creating the namespace,
@@ -244,7 +203,7 @@ var _ = Describe("Manager", Ordered, func() {
 	SetDefaultEventuallyTimeout(2 * time.Minute)
 	SetDefaultEventuallyPollingInterval(time.Second)
 
-	Context("Manager", func() {
+	When("installing", func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
@@ -559,8 +518,23 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(managerCanISubresource("update", "hyperfleetconfigs", "status")).To(BeTrue())
 			Expect(managerCanISubresource("update", "hyperfleetconfigs", "finalizers")).To(BeTrue())
 		})
+	})
 
-		It("should migrate a fresh database before the API becomes ready", func() {
+	When("provisioning dependencies", func() {
+		It("should provision a RabbitMQ before creating a HyperFleetConfig", func() {
+			By("deploying a disposable RabbitMQ broker in the restricted namespace")
+			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/rabbitmq.yaml", "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for RabbitMQ to accept AMQP connections")
+			cmd = exec.Command("kubectl", "rollout", "status", "deployment", rabbitmqOperandName,
+				"-n", namespace, "--timeout=3m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should provision a PostgreSQL database and the referenced Secrets before creating a HyperFleetConfig", func() {
 			By("deploying a disposable PostgreSQL database in the restricted namespace")
 			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/postgres.yaml", "-n", namespace)
 			_, err := utils.Run(cmd)
@@ -584,17 +558,38 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("creating the cluster-scoped HyperFleetConfig")
-			cmd = exec.Command("kubectl", "apply", "-f", "test/e2e/hyperfleetconfig.yaml")
+			By("creating the referenced JWKS Secret from the test cluster's OIDC keys")
+			// The Sentinels authenticate to the API with their projected
+			// service-account tokens, so the API must be able to validate
+			// them: feed it the cluster's real OIDC issuer and signing keys
+			// rather than a dummy JWKS the tokens can never match.
+			jwksJSON, err := utils.Run(exec.Command("kubectl", "get", "--raw", "/openid/v1/jwks"))
+			Expect(err).NotTo(HaveOccurred())
+			jwksPath := filepath.Join(GinkgoT().TempDir(), "jwks.json")
+			Expect(os.WriteFile(jwksPath, []byte(jwksJSON), 0o600)).To(Succeed())
+			cmd = exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-jwks",
+				"-n", namespace,
+				"--from-file=jwks.json="+jwksPath,
+			)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
 
-			By("waiting for the controller to create every operand")
+	When("deploying the HyperFleetConfig", func() {
+		It("should apply the HyperFleetConfig with default OIDC issuer", func() {
+			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/hyperfleetconfig.yaml")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should create every expected API operand", func() {
+			By("waiting for the controller to create the API operands")
 			operands := [][2]string{
-				{"deployment", apiOperandName},
+				{kindDeployment, apiOperandName},
 				{"service", apiOperandName},
-				{"serviceaccount", apiOperandName},
-				{"configmap", "hyperfleet-api-config"},
+				{kindServiceAccount, apiOperandName},
+				{kindConfigMap, apiConfigMapName},
 				{"role", apiOperandName},
 				{"rolebinding", apiOperandName},
 			}
@@ -606,11 +601,13 @@ var _ = Describe("Manager", Ordered, func() {
 					g.Expect(err).NotTo(HaveOccurred(), "expected %s/%s to be created", resourceType, resourceName)
 				}).Should(Succeed())
 			}
+		})
 
+		It("should migrate a fresh database before the API becomes ready", func() {
 			By("waiting for the API Deployment to complete its first migration and rollout")
-			cmd = exec.Command("kubectl", "rollout", "status", "deployment", apiOperandName,
+			cmd := exec.Command("kubectl", "rollout", "status", "deployment", apiOperandName,
 				"-n", namespace, "--timeout=2m")
-			_, err = utils.Run(cmd)
+			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			apiPodName := waitForMigratedAPIPod("")
 
@@ -619,23 +616,123 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			waitForMigratedAPIPod(apiPodName)
-
 		})
 
+		It("should create every expected Sentinel operand per cloud-capi entity", func() {
+			for _, resourceType := range sentinelResourceTypes {
+				names := sentinelOperandNames(resourceType)
+				operands := [][2]string{
+					{kindDeployment, names.Deployment},
+					{kindServiceAccount, names.ServiceAccount},
+					{kindConfigMap, names.ConfigMap},
+					{kindConfigMap, names.BrokerConfigMap},
+					{kindNetworkPolicy, names.NetworkPolicy},
+				}
+				for _, operand := range operands {
+					kind, resourceName := operand[0], operand[1]
+					By(fmt.Sprintf("waiting for the %s Sentinel %s/%s to be created",
+						resourceType, kind, resourceName))
+					Eventually(func(g Gomega) {
+						cmd := exec.Command("kubectl", "get", kind, resourceName, "-n", namespace)
+						_, err := utils.Run(cmd)
+						g.Expect(err).NotTo(HaveOccurred(), "expected %s/%s to be created", kind, resourceName)
+					}).Should(Succeed())
+				}
+			}
+		})
+	})
+
+	When("verifying the rendered Sentinel operands", func() {
+		It("should render the expected config.yaml for each Sentinel", func() {
+			// The fixture (test/e2e/hyperfleetconfig.yaml) enables API auth and no
+			// TLS, so the base URL scheme is http and the auth block must be present.
+			expectedBaseURL := "http://hyperfleet-api." + namespace + ".svc:8000"
+			for _, resourceType := range sentinelResourceTypes {
+				configMapName := sentinelOperandNames(resourceType).ConfigMap
+				By(fmt.Sprintf("verifying the %s Sentinel config.yaml", resourceType))
+				Eventually(func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "configmap", configMapName,
+						"-o", sentinelConfigJSONPath, "-n", namespace)
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+
+					cfg, err := parseSentinelConfig(output)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(cfg.ResourceType).To(Equal(resourceType))
+					g.Expect(cfg.Clients.HyperFleetAPI.BaseURL).To(Equal(expectedBaseURL))
+					g.Expect(cfg.Clients.Broker.Topic).To(Equal(namespace + "-" + resourceType))
+					g.Expect(cfg.Clients.HyperFleetAPI.Auth).NotTo(BeNil(),
+						"API auth is enabled in the fixture; the auth block must be rendered")
+					g.Expect(cfg.Clients.HyperFleetAPI.Auth.TokenPath).To(Equal(sentinelTokenPath))
+					g.Expect(cfg.Clients.HyperFleetAPI.Auth.Scheme).To(Equal("Bearer"))
+				}).Should(Succeed())
+			}
+		})
+
+		It("should render each Sentinel broker.yaml without rabbitmq creds", func() {
+			for _, resourceType := range sentinelResourceTypes {
+				brokerConfigMap := sentinelOperandNames(resourceType).BrokerConfigMap
+
+				By(fmt.Sprintf("verifying the %s Sentinel broker.yaml", resourceType))
+				cmd := exec.Command("kubectl", "get", "configmap", brokerConfigMap,
+					"-o", sentinelBrokerConfigJSONPath, "-n", namespace)
+				output, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "failed to read %s", brokerConfigMap)
+				// broker configmap should not contain any url or "amqp://" string
+				Expect(output).NotTo(ContainSubstring("amqp://"), "%s must not embed broker credentials", brokerConfigMap)
+				cfg, err := parseSentinelBrokerConfig(output)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Broker.Type).To(Equal("rabbitmq"))
+				Expect(cfg.Broker.RabbitMQ.ExchangeType).To(Equal("topic"))
+				Expect(cfg.Broker.RabbitMQ).NotTo(BeNil(),
+					"the fixture uses RabbitMQ; the rabbitmq block must be rendered")
+				Expect(cfg.Broker.RabbitMQ.URL).To(Equal(""),
+					"%s must render the empty url key: a re-added omitempty would break the "+
+						"BROKER_RABBITMQ_URL env overlay",
+					brokerConfigMap)
+				Expect(cfg.Broker.RabbitMQ.ExchangeType).To(Equal("topic"))
+			}
+		})
+
+		It("should run each Sentinel ready against the broker without crashloops", func() {
+			for _, resourceType := range sentinelResourceTypes {
+				deploymentName := sentinelOperandNames(resourceType).Deployment
+
+				By(fmt.Sprintf("waiting for the %s Sentinel rollout to complete", resourceType))
+				cmd := exec.Command("kubectl", "rollout", "status", "deployment", deploymentName,
+					"-n", namespace, "--timeout=3m")
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "%s Sentinel did not become ready", resourceType)
+
+				By(fmt.Sprintf("verifying the %s Sentinel pod is ready", resourceType))
+				sentinelReady := func(g Gomega) string {
+					cmd := exec.Command("kubectl", "get", "pods", "-l", sentinelPodLabel(resourceType),
+						"-o", sentinelReadyJSONPath, "-n", namespace)
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					return strings.TrimSpace(output)
+				}
+				Eventually(func(g Gomega) string { return sentinelReady(g) }).
+					Should(Equal("True"), "the %s Sentinel pod is not ready", resourceType)
+			}
+		})
+	})
+
+	When("administering registrations", func() {
 		It("restricts management-cluster registration to explicitly delegated Hub administrators",
 			checkRegistrationAdministration)
-
-		// +kubebuilder:scaffold:e2e-webhooks-checks
-
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
 	})
+
+	// +kubebuilder:scaffold:e2e-webhooks-checks
+
+	// TODO: Customize the e2e test suite with scenarios specific to your project.
+	// Consider applying sample/CR(s) and check their status and/or verifying
+	// the reconciliation by using the metrics, i.e.:
+	// metricsOutput := getMetricsOutput()
+	// Expect(metricsOutput).To(ContainSubstring(
+	//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
+	//    strings.ToLower(<Kind>),
+	// ))
 })
 
 func generateMetricsServingCertificate(

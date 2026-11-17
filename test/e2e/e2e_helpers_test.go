@@ -189,3 +189,108 @@ func TestManagerCanIArgs(t *testing.T) {
 		t.Errorf("managerCanIArgs() = %v, want %v", got, want)
 	}
 }
+
+func TestSentinelOperandNames(t *testing.T) {
+	t.Parallel()
+
+	names := sentinelOperandNames("nodepools")
+	nodepoolName := "hyperfleet-sentinel-nodepools"
+	want := sentinelOperands{
+		Deployment:      nodepoolName,
+		ServiceAccount:  nodepoolName,
+		ConfigMap:       nodepoolName + "-config",
+		BrokerConfigMap: nodepoolName + "-broker-config",
+		NetworkPolicy:   nodepoolName,
+	}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("sentinelOperandNames(nodepools) = %+v, want %+v", names, want)
+	}
+}
+
+func TestSentinelPodLabel(t *testing.T) {
+	t.Parallel()
+
+	// The label value is the component name, not the resource name.
+	if got := sentinelPodLabel("wifconfigs"); got != "app.kubernetes.io/name=sentinel-wifconfigs" {
+		t.Errorf("sentinelPodLabel(wifconfigs) = %q", got)
+	}
+}
+
+func TestParseSentinelConfig(t *testing.T) {
+	t.Parallel()
+
+	const config = `# Sentinel configuration — rendered by hyperfleet-operator (HYPERFLEET-1673).
+# Managed resource: manual edits are overwritten on the next reconcile.
+sentinel:
+  name: hyperfleet-sentinel-clusters
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api.hyperfleet-system.svc:8000
+    version: v1
+    timeout: 10s
+    auth:
+      token_path: /var/run/secrets/hyperfleet/api-token/token
+      scheme: Bearer
+  broker:
+    topic: hyperfleet-system-clusters
+resource_type: clusters
+`
+	cfg, err := parseSentinelConfig(config)
+	if err != nil {
+		t.Fatalf("parseSentinelConfig() error = %v", err)
+	}
+	if cfg.ResourceType != "clusters" {
+		t.Errorf("ResourceType = %q, want clusters", cfg.ResourceType)
+	}
+	if cfg.Clients.HyperFleetAPI.BaseURL != "http://hyperfleet-api.hyperfleet-system.svc:8000" {
+		t.Errorf("BaseURL = %q", cfg.Clients.HyperFleetAPI.BaseURL)
+	}
+	if cfg.Clients.Broker.Topic != "hyperfleet-system-clusters" {
+		t.Errorf("Topic = %q", cfg.Clients.Broker.Topic)
+	}
+	if cfg.Clients.HyperFleetAPI.Auth == nil {
+		t.Fatal("Auth block not parsed")
+	}
+	if cfg.Clients.HyperFleetAPI.Auth.TokenPath != "/var/run/secrets/hyperfleet/api-token/token" {
+		t.Errorf("TokenPath = %q", cfg.Clients.HyperFleetAPI.Auth.TokenPath)
+	}
+	if cfg.Clients.HyperFleetAPI.Auth.Scheme != "Bearer" {
+		t.Errorf("Scheme = %q", cfg.Clients.HyperFleetAPI.Auth.Scheme)
+	}
+
+	// Without the auth block, Auth must parse as nil so the e2e absence
+	// assertion is meaningful.
+	const noAuth = `clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api.hyperfleet-system.svc:8000
+resource_type: versions
+`
+	cfg, err = parseSentinelConfig(noAuth)
+	if err != nil {
+		t.Fatalf("parseSentinelConfig(noAuth) error = %v", err)
+	}
+	if cfg.Clients.HyperFleetAPI.Auth != nil {
+		t.Errorf("Auth = %+v, want nil", cfg.Clients.HyperFleetAPI.Auth)
+	}
+}
+
+func TestParseOIDCIssuer(t *testing.T) {
+	t.Parallel()
+
+	const doc = `{"issuer":"https://kubernetes.default.svc.cluster.local",` +
+		`"jwks_uri":"https://172.18.0.3:6443/openid/v1/jwks"}`
+	issuer, err := parseOIDCIssuer(doc)
+	if err != nil {
+		t.Fatalf("parseOIDCIssuer() error = %v", err)
+	}
+	if issuer != "https://kubernetes.default.svc.cluster.local" {
+		t.Errorf("issuer = %q", issuer)
+	}
+
+	if _, err := parseOIDCIssuer(`{"jwks_uri":"https://example/jwks"}`); err == nil {
+		t.Error("parseOIDCIssuer() expected an error for a missing issuer")
+	}
+	if _, err := parseOIDCIssuer(`not-json`); err == nil {
+		t.Error("parseOIDCIssuer() expected an error for invalid JSON")
+	}
+}

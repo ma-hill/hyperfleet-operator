@@ -53,7 +53,7 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	By("building the manager(Operator) image")
+	By("building the operator image")
 	cmd := exec.Command("make", managerImageBuildArgs(os.Getenv("KIND_EXPERIMENTAL_PROVIDER"))...)
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")

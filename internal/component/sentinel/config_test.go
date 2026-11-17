@@ -143,6 +143,7 @@ func TestRenderBrokerConfigRabbitMQ(t *testing.T) {
 	g.Expect(out).To(HavePrefix("# Broker configuration"))
 	g.Expect(out).To(ContainSubstring("type: rabbitmq"))
 	g.Expect(out).To(ContainSubstring("exchange_type: topic"))
+	g.Expect(out).To(ContainSubstring(`url: ""`))
 	g.Expect(out).NotTo(ContainSubstring("googlepubsub"))
 }
 
@@ -219,7 +220,7 @@ func TestRenderBrokerConfigRabbitMQIsValidYAML(t *testing.T) {
 	g.Expect(yaml.Unmarshal([]byte(lines[2]), &parsed)).To(Succeed())
 	g.Expect(parsed.Broker.Type).To(Equal(BrokerTypeRabbitMQ))
 	g.Expect(parsed.Broker.RabbitMQ).NotTo(BeNil())
-	g.Expect(parsed.Broker.RabbitMQ.URL).NotTo(BeEmpty())
+	g.Expect(parsed.Broker.RabbitMQ.URL).To(Equal(""))
 	g.Expect(parsed.Broker.RabbitMQ.ExchangeType).To(Equal("topic"))
 	g.Expect(parsed.Broker.GooglePubSub).To(BeNil())
 }
