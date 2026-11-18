@@ -19,19 +19,26 @@ package e2e
 import (
 	"fmt"
 
+	"github.com/openshift-hyperfleet/hyperfleet-operator/internal/bundle"
 	"sigs.k8s.io/yaml"
 )
 
-// cloudCAPIResourceTypes lists the plural resource types the cloud-capi
-// bundle registers (internal/bundle.CloudCAPIEntities); one Sentinel instance
-// is rendered per entry. Keep in sync when the entity set changes.
-var cloudCAPIResourceTypes = []string{"clusters", "nodepools", "channels", "versions", "wifconfigs"}
+var sentinelResourceTypes = func() []string {
+	types := make([]string, 0,
+		len(bundle.CloudCAPIEntities))
+	for _, e := range bundle.CloudCAPIEntities {
+		types = append(types, e.Plural)
+	}
+	return types
+}()
 
 const (
 	// sentinelConfigJSONPath extracts the config.yaml key from a Sentinel
 	// ConfigMap; jsonpath requires the dot in the key to be escaped or it is
 	// read as nested fields.
 	sentinelConfigJSONPath = `jsonpath={.data.config\.yaml}`
+	// sentinelBrokerConfigJSONPath extracts the broker.yaml key the same way.
+	sentinelBrokerConfigJSONPath = `jsonpath={.data.broker\.yaml}`
 	// sentinelTokenPath must match the projected token path the sentinel
 	// component renders when API auth is enabled.
 	sentinelTokenPath = "/var/run/secrets/hyperfleet/api-token/token"
@@ -97,6 +104,31 @@ func parseSentinelConfig(configYAML string) (sentinelE2EConfig, error) {
 	return cfg, nil
 }
 
+// sentinelE2EBrokerConfig is the subset of the rendered broker.yaml the e2e
+// suite asserts on; the json tags match the sentinel component's broker.yaml
+// contract. The empty rabbitmq url key is load-bearing: registering it lets
+// the BROKER_RABBITMQ_URL env var from the broker Secret supply the runtime
+// value, so credentials must never appear in the ConfigMap.
+type sentinelE2EBrokerConfig struct {
+	Broker struct {
+		Type     string `json:"type"`
+		RabbitMQ *struct {
+			URL          string `json:"url"`
+			ExchangeType string `json:"exchange_type"`
+		} `json:"rabbitmq"`
+	} `json:"broker"`
+}
+
+// parseSentinelBrokerConfig unmarshals one Sentinel's rendered broker.yaml,
+// including the operator's comment header, which is valid YAML.
+func parseSentinelBrokerConfig(brokerYAML string) (sentinelE2EBrokerConfig, error) {
+	var cfg sentinelE2EBrokerConfig
+	if err := yaml.Unmarshal([]byte(brokerYAML), &cfg); err != nil {
+		return cfg, fmt.Errorf("parse sentinel broker.yaml: %w", err)
+	}
+	return cfg, nil
+}
+
 // sentinelPodLabel matches the pods of one Sentinel instance; the label value
 // is the component name (sentinel-<resource type>), not the resource name.
 func sentinelPodLabel(resourceType string) string {
@@ -107,23 +139,3 @@ func sentinelPodLabel(resourceType string) string {
 // Sentinel's /readyz gates on broker health and a successful poll, so Ready
 // is the contract-backed signal that the broker connection works.
 const sentinelReadyJSONPath = "jsonpath={.items[0].status.conditions[?(@.type=='Ready')].status}"
-
-// fixtureDummyIssuer is the placeholder issuer in
-// test/e2e/hyperfleetconfig.yaml, replaced with the test cluster's real OIDC
-// issuer before the manifest is applied.
-const fixtureDummyIssuer = "https://issuer.example.com"
-
-// parseOIDCIssuer extracts the issuer URL from an API server
-// /.well-known/openid-configuration document.
-func parseOIDCIssuer(discoveryJSON string) (string, error) {
-	var doc struct {
-		Issuer string `json:"issuer"`
-	}
-	if err := yaml.Unmarshal([]byte(discoveryJSON), &doc); err != nil {
-		return "", fmt.Errorf("parse openid-configuration: %w", err)
-	}
-	if doc.Issuer == "" {
-		return "", fmt.Errorf("openid-configuration has no issuer")
-	}
-	return doc.Issuer, nil
-}

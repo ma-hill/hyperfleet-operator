@@ -558,26 +558,11 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("creating the referenced JWKS Secret from the test cluster's OIDC keys")
-			// The Sentinels authenticate to the API with their projected
-			// service-account tokens, so the API must be able to validate
-			// them: feed it the cluster's real OIDC issuer and signing keys
-			// rather than a dummy JWKS the tokens can never match.
-			jwksJSON, err := utils.Run(exec.Command("kubectl", "get", "--raw", "/openid/v1/jwks"))
-			Expect(err).NotTo(HaveOccurred())
-			jwksPath := filepath.Join(GinkgoT().TempDir(), "jwks.json")
-			Expect(os.WriteFile(jwksPath, []byte(jwksJSON), 0o600)).To(Succeed())
-			cmd = exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-jwks",
-				"-n", namespace,
-				"--from-file=jwks.json="+jwksPath,
-			)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 
 	When("deploying the HyperFleetConfig", func() {
-		It("should apply the HyperFleetConfig with default OIDC issuer", func() {
+		It("should apply the HyperFleetConfig in test/e2e/hyperfleetconfig.yaml", func() {
 			cmd := exec.Command("kubectl", "apply", "-f", "test/e2e/hyperfleetconfig.yaml")
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
@@ -725,14 +710,6 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 
 	// +kubebuilder:scaffold:e2e-webhooks-checks
 
-	// TODO: Customize the e2e test suite with scenarios specific to your project.
-	// Consider applying sample/CR(s) and check their status and/or verifying
-	// the reconciliation by using the metrics, i.e.:
-	// metricsOutput := getMetricsOutput()
-	// Expect(metricsOutput).To(ContainSubstring(
-	//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-	//    strings.ToLower(<Kind>),
-	// ))
 })
 
 func generateMetricsServingCertificate(

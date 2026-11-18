@@ -274,23 +274,31 @@ resource_type: versions
 	}
 }
 
-func TestParseOIDCIssuer(t *testing.T) {
+func TestParseSentinelBrokerConfig(t *testing.T) {
 	t.Parallel()
 
-	const doc = `{"issuer":"https://kubernetes.default.svc.cluster.local",` +
-		`"jwks_uri":"https://172.18.0.3:6443/openid/v1/jwks"}`
-	issuer, err := parseOIDCIssuer(doc)
+	const config = `# Comments have been added to broker.yaml
+# ensure that yaml can still be parsed
+broker:
+  type: rabbitmq
+  rabbitmq:
+    url: ""
+    exchange_type: topic
+`
+	cfg, err := parseSentinelBrokerConfig(config)
 	if err != nil {
-		t.Fatalf("parseOIDCIssuer() error = %v", err)
+		t.Fatalf("parseSentinelBrokerConfig() error = %v", err)
 	}
-	if issuer != "https://kubernetes.default.svc.cluster.local" {
-		t.Errorf("issuer = %q", issuer)
+	if cfg.Broker.Type != "rabbitmq" {
+		t.Errorf("Type = %q, want rabbitmq", cfg.Broker.Type)
 	}
-
-	if _, err := parseOIDCIssuer(`{"jwks_uri":"https://example/jwks"}`); err == nil {
-		t.Error("parseOIDCIssuer() expected an error for a missing issuer")
+	if cfg.Broker.RabbitMQ == nil {
+		t.Fatal("RabbitMQ block not parsed")
 	}
-	if _, err := parseOIDCIssuer(`not-json`); err == nil {
-		t.Error("parseOIDCIssuer() expected an error for invalid JSON")
+	if cfg.Broker.RabbitMQ.URL != "" {
+		t.Errorf("URL = %q, want the empty key so BROKER_RABBITMQ_URL can supply it", cfg.Broker.RabbitMQ.URL)
+	}
+	if cfg.Broker.RabbitMQ.ExchangeType != "topic" {
+		t.Errorf("ExchangeType = %q, want topic", cfg.Broker.RabbitMQ.ExchangeType)
 	}
 }
