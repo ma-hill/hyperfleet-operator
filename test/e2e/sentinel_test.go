@@ -113,8 +113,10 @@ type sentinelE2EBrokerConfig struct {
 	Broker struct {
 		Type     string `json:"type"`
 		RabbitMQ *struct {
-			URL          string `json:"url"`
-			ExchangeType string `json:"exchange_type"`
+			// URL is a pointer so tests can distinguish a rendered `url: ""`
+			// key from an omitted url key.
+			URL          *string `json:"url"`
+			ExchangeType string  `json:"exchange_type"`
 		} `json:"rabbitmq"`
 	} `json:"broker"`
 }

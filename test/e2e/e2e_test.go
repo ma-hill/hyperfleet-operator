@@ -668,12 +668,14 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 				cfg, err := parseSentinelBrokerConfig(output)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(cfg.Broker.Type).To(Equal("rabbitmq"))
-				Expect(cfg.Broker.RabbitMQ.ExchangeType).To(Equal("topic"))
 				Expect(cfg.Broker.RabbitMQ).NotTo(BeNil(),
 					"the fixture uses RabbitMQ; the rabbitmq block must be rendered")
-				Expect(cfg.Broker.RabbitMQ.URL).To(Equal(""),
-					"%s must render the empty url key: a re-added omitempty would break the "+
+				Expect(cfg.Broker.RabbitMQ.URL).NotTo(BeNil(),
+					"%s must render the url key: a re-added omitempty would break the "+
 						"BROKER_RABBITMQ_URL env overlay",
+					brokerConfigMap)
+				Expect(*cfg.Broker.RabbitMQ.URL).To(BeEmpty(),
+					"%s must render the url key empty so broker credentials stay in the Secret",
 					brokerConfigMap)
 				Expect(cfg.Broker.RabbitMQ.ExchangeType).To(Equal("topic"))
 			}

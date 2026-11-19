@@ -295,8 +295,11 @@ broker:
 	if cfg.Broker.RabbitMQ == nil {
 		t.Fatal("RabbitMQ block not parsed")
 	}
-	if cfg.Broker.RabbitMQ.URL != "" {
-		t.Errorf("URL = %q, want the empty key so BROKER_RABBITMQ_URL can supply it", cfg.Broker.RabbitMQ.URL)
+	if cfg.Broker.RabbitMQ.URL == nil {
+		t.Fatal("URL key not rendered; want the empty key so BROKER_RABBITMQ_URL can supply it")
+	}
+	if *cfg.Broker.RabbitMQ.URL != "" {
+		t.Errorf("URL = %q, want empty so broker credentials stay in the Secret", *cfg.Broker.RabbitMQ.URL)
 	}
 	if cfg.Broker.RabbitMQ.ExchangeType != "topic" {
 		t.Errorf("ExchangeType = %q, want topic", cfg.Broker.RabbitMQ.ExchangeType)
