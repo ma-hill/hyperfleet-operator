@@ -35,7 +35,6 @@ var (
 	skipCertManagerInstall        bool
 	kindOperatorImg               string
 	isCertManagerAlreadyInstalled bool = false
-	containerTool                 string
 )
 
 func init() {
@@ -45,8 +44,6 @@ func init() {
 		"name of the operator image to use for testing")
 	flag.BoolVar(&skipCertManagerInstall, "skip-cert-manager-install", false,
 		"skip CertManager installation during test setup")
-	flag.StringVar(&containerTool, "container-tool", "docker",
-		"override default container tool if KIND_EXPERIMENTAL_PROVIDER is set")
 }
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,

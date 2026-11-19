@@ -171,7 +171,7 @@ release/scenario inputs. It does not reuse the local-manager setup below.
 Use a dedicated Kind cluster name that contains no valuable workloads:
 
 ```sh
-make test-e2e KIND_CLUSTER=hyperfleet-operator-dev
+make test-e2e-kind KIND_CLUSTER=hyperfleet-operator-dev
 ```
 
 The target creates the named cluster only when it does not already exist,
@@ -185,15 +185,15 @@ If the Go test command fails, Make stops before the cleanup recipe. Preserve any
 useful diagnostics, then remove the dedicated cluster explicitly:
 
 ```sh
-make cleanup-test-e2e KIND_CLUSTER=hyperfleet-operator-dev
+make destroy-kind-cluster KIND_CLUSTER=hyperfleet-operator-dev
 ```
 
 The e2e suite gathers pod logs, events, and resource descriptions on failure.
-Set `CERT_MANAGER_INSTALL_SKIP=true` only when a compatible cert-manager is
+Set `SKIP_CERT_MANAGER_INSTALL=true` only when a compatible cert-manager is
 already present or the scenario does not require it:
 
 ```sh
-make test-e2e KIND_CLUSTER=hyperfleet-operator-dev CERT_MANAGER_INSTALL_SKIP=true
+make test-e2e-kind KIND_CLUSTER=hyperfleet-operator-dev SKIP_CERT_MANAGER_INSTALL=true
 ```
 
 ## Generated and release-facing files
@@ -217,6 +217,6 @@ minimum:
 |---|---|
 | `make bundle-build` cannot find `envsubst` | Install gettext. The development bundle overlay is generated from `config/manifests/dev/patch-images.yaml` with `envsubst`; the generated `kustomization.yaml` is ignored by Git. |
 | Controller tests cannot start envtest | Run `make test` with network access so `setup-envtest` can obtain the Kubernetes control-plane binaries matching the Go module's Kubernetes dependencies. |
-| An e2e run leaves a Kind cluster behind | Preserve the failure diagnostics, then run `make cleanup-test-e2e KIND_CLUSTER=<dedicated-cluster-name>`. Do not use a shared or valuable cluster name: the normal successful path deletes it too. |
+| An e2e run leaves a Kind cluster behind | Preserve the failure diagnostics, then run `make destroy-kind-cluster KIND_CLUSTER=<dedicated-cluster-name>`. Do not use a shared or valuable cluster name: the normal successful path deletes it too. |
 | Generated files change unexpectedly | Run `make manifests generate`, inspect the diff, and keep only changes caused by the API, RBAC, or controller markers you intentionally changed. |
 | `make run` cannot reconcile the sample | Confirm that `OPERATOR_NAMESPACE` exists and contains the referenced Secrets, then check that the database is reachable from the manager and API workloads. |

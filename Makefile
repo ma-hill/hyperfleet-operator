@@ -95,11 +95,6 @@ install-hooks: ## Install pre-commit hooks.
 ##@ Unit/Integration Testing
 ENVTEST_K8S_VERSION ?= $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 
-# TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
-# The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
-# CertManager is installed by default; skip with:
-# - CERT_MANAGER_INSTALL_SKIP=true
-
 .PHONY: setup-envtest
 setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserver) into the local bin directory.
 	$(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path
@@ -111,9 +106,13 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 ##@ E2E Cluster Testing
 
-KIND_CLUSTER ?= hyperfleet-operator-test-e2e
+# Default to false, since we want to allows install cert-manager unless specified not to
+# In test-e2e-ci, don't even give an option since we always want ci to install cert-manager
+SKIP_CERT_MANAGER_INSTALL ?= false
 
 # Kind Targets
+KIND_CLUSTER ?= hyperfleet-operator-test-e2e
+
 .PHONY: check-kind
 check-kind: ## Check if Kind is installed, exit with error if not.
 	@command -v $(KIND) >/dev/null 2>&1 || { \
@@ -148,11 +147,11 @@ pre-e2e-checks: ## Check for required environment variables and files for e2e te
 
 .PHONY: test-e2e-kind
 test-e2e-kind: setup-kind-cluster manifests generate fmt vet pre-e2e-checks ## Run the e2e tests in a self-contained Kind cluster (created and deleted by the target).
-	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true
+	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true --skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)
 	$(MAKE) destroy-kind-cluster KIND_CLUSTER=$(KIND_CLUSTER)
 
-.PHONY: test-e2e
-test-e2e-ci: manifests generate fmt vet pre-e2e-checks ## Run the e2e tests against the cluster KUBECONFIG points at. Requires KUBECONFIG and OPERATOR_IMG (a pullable image).
+.PHONY: test-e2e-ci
+test-e2e-ci: manifests generate fmt vet pre-e2e-checks ## Run the e2e tests against the cluster KUBECONFIG points at. Requires KUBECONFIG; assumes the operator is already installed.
 	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=false
 
 ##@ Upgrade Testing

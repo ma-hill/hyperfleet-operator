@@ -51,6 +51,7 @@ const (
 	apiConfigMapName    = "hyperfleet-api-config"
 	postgresOperandName = "hyperfleet-postgres"
 	rabbitmqOperandName = "hyperfleet-rabbitmq"
+	postgresSecretName  = "hyperfleet-db"
 )
 
 const (
@@ -140,6 +141,9 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			"kubectl", "delete", "pod", secureMetricsCurlPod, "-n", namespace, "--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the metrics server certificate",
 			"kubectl", "delete", "secret", metricsServerCertificateSecret, "-n", namespace,
+			"--ignore-not-found=true", "--wait=false")
+		runCleanup("cleaning up the referenced database Secret",
+			"kubectl", "delete", "secret", postgresSecretName, "-n", namespace,
 			"--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the e2e metrics reader binding",
 			"kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true", "--wait=false")
@@ -554,7 +558,7 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By("creating the referenced database Secret")
-			cmd = exec.Command("kubectl", "create", "secret", "generic", "hyperfleet-db",
+			cmd = exec.Command("kubectl", "create", "secret", "generic", postgresSecretName,
 				"-n", namespace,
 				"--from-literal=db.host="+postgresOperandName,
 				"--from-literal=db.port=5432",
