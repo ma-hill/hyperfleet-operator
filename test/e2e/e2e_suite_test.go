@@ -17,9 +17,11 @@ limitations under the License.
 package e2e
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -29,18 +31,23 @@ import (
 )
 
 var (
-	// Optional Environment Variables:
-	// - CERT_MANAGER_INSTALL_SKIP=true: Skips CertManager installation during test setup.
-	// These variables are useful if CertManager is already installed, avoiding
-	// re-installation and conflicts.
-	skipCertManagerInstall = os.Getenv("CERT_MANAGER_INSTALL_SKIP") == "true"
-	// isCertManagerAlreadyInstalled will be set true when CertManager CRDs be found on the cluster
-	isCertManagerAlreadyInstalled = false
-
-	// projectImage is the name of the image which will be build and loaded
-	// with the code source changes to be tested.
-	projectImage = "example.com/hyperfleet-operator:v0.0.1"
+	kindMode                      bool
+	skipCertManagerInstall        bool
+	kindOperatorImg               string
+	isCertManagerAlreadyInstalled bool = false
+	containerTool                 string
 )
+
+func init() {
+	flag.BoolVar(&kindMode, "kind-mode", false,
+		"build the manager image and load it into the Kind cluster before running the suite")
+	flag.StringVar(&kindOperatorImg, "kind-operator-img", "localhost/hyperfleet-operator:dev-local",
+		"name of the operator image to use for testing")
+	flag.BoolVar(&skipCertManagerInstall, "skip-cert-manager-install", false,
+		"skip CertManager installation during test setup")
+	flag.StringVar(&containerTool, "container-tool", "docker",
+		"override default container tool if KIND_EXPERIMENTAL_PROVIDER is set")
+}
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
 // temporary environment to validate project changes with the purposed to be used in CI jobs.
@@ -53,16 +60,17 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	By("building the operator image")
-	cmd := exec.Command("make", managerImageBuildArgs(os.Getenv("KIND_EXPERIMENTAL_PROVIDER"))...)
-	_, err := utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
+	if kindMode {
+		By("building the operator image")
+		provider := os.Getenv("KIND_EXPERIMENTAL_PROVIDER")
+		cmd := exec.Command("make", managerImageBuildArgs(kindOperatorImg, runtime.GOARCH, provider)...)
+		_, err := utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the operator image")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind, ensure the image is
-	// built and available before running the tests. Also, remove the following block.
-	By("loading the manager(Operator) image on Kind")
-	err = utils.LoadImageToKindClusterWithName(projectImage)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+		By("loading the operator image into Kind cluster")
+		err = utils.LoadImageToKindClusterWithName(kindOperatorImg)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the operator image into Kind")
+	}
 
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with CertManager already installed,
@@ -80,12 +88,13 @@ var _ = BeforeSuite(func() {
 	}
 })
 
-func managerImageBuildArgs(provider string) []string {
-	args := []string{"image", fmt.Sprintf("OPERATOR_IMG=%s", projectImage)}
-	// The loader saves from Podman's image store for this provider, so the
-	// image must also be built there, even when CONTAINER_TOOL is not set.
-	if provider == "podman" {
+func managerImageBuildArgs(operatorImg string, arch string, containerTool string) []string {
+	args := []string{"image", fmt.Sprintf("OPERATOR_IMG=%s", operatorImg), fmt.Sprintf("PLATFORM=linux/%s", arch)}
+	// if KIND_EXPERIMENTAL_PROVIDER = podman, override CONTAINER_TOOL, otherwise set to docker
+	if containerTool == "podman" {
 		args = append(args, "CONTAINER_TOOL=podman")
+	} else {
+		args = append(args, "CONTAINER_TOOL=docker")
 	}
 	return args
 }
