@@ -93,27 +93,30 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 	// enforce the restricted security policy to the namespace, installing CRDs,
 	// and deploying the controller.
 	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
+		if kindMode {
+			By("creating manager namespace")
+			cmd := exec.Command("kubectl", "create", "ns", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+			By("labeling the namespace to enforce the restricted security policy")
+			cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+				"pod-security.kubernetes.io/enforce=restricted")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
+			By("installing CRDs")
+			cmd = exec.Command("make", "install")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", projectImage),
-			fmt.Sprintf("RELATED_IMAGE_HYPERFLEET_OPERATOR=%s", projectImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+			By("deploying the controller-manager")
+			cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", kindOperatorImg),
+				fmt.Sprintf("RELATED_IMAGE_HYPERFLEET_OPERATOR=%s", kindOperatorImg))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+		}
+
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -140,12 +143,16 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			"--ignore-not-found=true", "--wait=false")
 		runCleanup("cleaning up the e2e metrics reader binding",
 			"kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true", "--wait=false")
-		runCleanup("undeploying the controller-manager",
-			"make", "undeploy", "ignore-not-found=true")
-		runCleanup("uninstalling CRDs",
-			"make", "uninstall", "ignore-not-found=true")
-		runCleanup("removing manager namespace",
-			"kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
+
+		// Only cleanup controller-manager + resources + namespace if kindMode
+		if kindMode {
+			runCleanup("undeploying the controller-manager",
+				"make", "undeploy", "ignore-not-found=true")
+			runCleanup("uninstalling CRDs",
+				"make", "uninstall", "ignore-not-found=true")
+			runCleanup("removing manager namespace",
+				"kubectl", "delete", "ns", namespace, "--ignore-not-found=true", "--wait=false")
+		}
 
 		Expect(errors.Join(cleanupErrors...)).NotTo(HaveOccurred(), "e2e cleanup failed")
 	})
