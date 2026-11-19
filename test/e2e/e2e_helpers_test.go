@@ -64,24 +64,32 @@ func TestInvalidBearerTokenLogPattern(t *testing.T) {
 	}
 }
 
+const (
+	containerToolDocker = "docker"
+	containerToolPodman = "podman"
+)
+
 func TestManagerImageBuildArgs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		provider     string
-		containerArg string
+		arch          string
+		containerTool string
+		wantSuffix    string
 	}{
-		{provider: ""},
-		{provider: "docker"},
-		{provider: "podman", containerArg: "CONTAINER_TOOL=podman"},
-		{provider: "nerdctl"},
+		{arch: "arm64", containerTool: containerToolDocker, wantSuffix: containerToolDocker},
+		{arch: "arm64", containerTool: "", wantSuffix: containerToolDocker},
+		{arch: "amd64", containerTool: containerToolPodman, wantSuffix: containerToolPodman},
+		{arch: "amd64", containerTool: containerToolDocker, wantSuffix: containerToolDocker},
 	} {
-		t.Run(tc.provider, func(t *testing.T) {
-			want := []string{"image", fmt.Sprintf("OPERATOR_IMG=%s", projectImage)}
-			if tc.containerArg != "" {
-				want = append(want, tc.containerArg)
+		t.Run(tc.wantSuffix, func(t *testing.T) {
+			want := []string{
+				"image",
+				fmt.Sprintf("OPERATOR_IMG=%s", kindOperatorImg),
+				fmt.Sprintf("PLATFORM=linux/%s", tc.arch),
+				fmt.Sprintf("CONTAINER_TOOL=%s", tc.wantSuffix),
 			}
-			if got := managerImageBuildArgs(tc.provider); !reflect.DeepEqual(got, want) {
-				t.Errorf("managerImageBuildArgs(%q) = %v, want %v", tc.provider, got, want)
+			if got := managerImageBuildArgs(kindOperatorImg, tc.arch, tc.containerTool); !reflect.DeepEqual(got, want) {
+				t.Errorf("managerImageBuildArgs(%q) = %v, want %v", tc.wantSuffix, got, want)
 			}
 		})
 	}
