@@ -92,9 +92,8 @@ go-vet: vet ## Alias for vet (used by the hyperfleet-go-vet pre-commit hook).
 install-hooks: ## Install pre-commit hooks.
 	pre-commit install
 
-##@ Testing
+##@ Unit/Integration Testing
 ENVTEST_K8S_VERSION ?= $(shell GOTOOLCHAIN="$(GOTOOLCHAIN)" $(GO) list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
-KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -109,12 +108,21 @@ setup-envtest: $(LOCALBIN) ## Download the envtest binaries (etcd, kube-apiserve
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use '$(ENVTEST_K8S_VERSION)' --bin-dir $(LOCALBIN) -p path)" $(GO) test $$($(GO) list ./... | grep -v '/test/e2e$$') -coverprofile cover.out
 
-.PHONY: setup-test-e2e
-setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
+
+##@ E2E Cluster Testing
+
+KIND_CLUSTER ?= hyperfleet-operator-test-e2e
+
+# Kind Targets
+.PHONY: check-kind
+check-kind: ## Check if Kind is installed, exit with error if not.
 	@command -v $(KIND) >/dev/null 2>&1 || { \
 		echo "Kind is not installed. Please install Kind manually."; \
 		exit 1; \
 	}
+
+.PHONY: setup-kind-cluster
+setup-kind-cluster: check-kind ## Set up a Kind cluster for e2e tests if it does not exist
 	@case "$$($(KIND) get clusters)" in \
 		*"$(KIND_CLUSTER)"*) \
 			echo "Kind cluster '$(KIND_CLUSTER)' already exists. Skipping creation." ;; \
@@ -123,14 +131,31 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 			$(KIND) create cluster --name $(KIND_CLUSTER) ;; \
 	esac
 
-.PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
-	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
+.PHONY: destroy-kind-cluster
+destroy-kind-cluster: check-kind ## Destroy the Kind cluster used for e2e tests
+	$(KIND) delete cluster --name $(KIND_CLUSTER)
 
-.PHONY: cleanup-test-e2e
-cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
-	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+.PHONY: pre-e2e-checks
+pre-e2e-checks: ## Check for required environment variables and files for e2e tests.
+	@if [ -z "$$KUBECONFIG" ]; then \
+		echo "ERROR: KUBECONFIG must be set to the target cluster's kubeconfig."; \
+		exit 1; \
+	fi
+	@if [ ! -f "$$KUBECONFIG" ]; then \
+		echo "ERROR: KUBECONFIG file $$KUBECONFIG does not exist."; \
+		exit 1; \
+	fi
+
+.PHONY: test-e2e-kind
+test-e2e-kind: setup-kind-cluster manifests generate fmt vet pre-e2e-checks ## Run the e2e tests in a self-contained Kind cluster (created and deleted by the target).
+	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true
+	$(MAKE) destroy-kind-cluster KIND_CLUSTER=$(KIND_CLUSTER)
+
+.PHONY: test-e2e
+test-e2e-ci: manifests generate fmt vet pre-e2e-checks ## Run the e2e tests against the cluster KUBECONFIG points at. Requires KUBECONFIG and OPERATOR_IMG (a pullable image).
+	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=false
+
+##@ Upgrade Testing
 
 # Prepared-cluster OLM tests consume published artifacts. They must not invoke
 # setup-test-e2e, build a replacement manager, or install locally generated CRDs.
