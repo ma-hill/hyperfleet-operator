@@ -55,6 +55,7 @@ const (
 	getVerb     = "get"
 	listVerb    = "list"
 	watchVerb   = "watch"
+	deleteVerb  = "delete"
 	asGroupFlag = "--as-group"
 )
 
@@ -511,7 +512,7 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			}
 
 			By("verifying cluster-scoped HyperFleetConfig access")
-			for _, verb := range []string{getVerb, listVerb, watchVerb, "create", "update", "patch", "delete"} {
+			for _, verb := range []string{getVerb, listVerb, watchVerb, "create", "update", "patch", deleteVerb} {
 				Expect(managerCanI(verb, "hyperfleetconfigs.hyperfleet.redhat.com", "")).To(BeTrue(),
 					"manager should retain cluster-scoped HyperFleetConfig %s access", verb)
 			}

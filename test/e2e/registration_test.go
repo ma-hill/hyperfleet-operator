@@ -56,6 +56,23 @@ func checkRegistrationAdministration() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
+	By("rejecting remote Applier self-registration")
+	applierSA := "system:serviceaccount:management-cluster:applier"
+	applierArgs := []string{asFlag, applierSA, asGroupFlag, authenticatedGroup,
+		asGroupFlag, serviceAccountsGroup,
+		asGroupFlag, serviceAccountsGroup + ":management-cluster"}
+	for _, verb := range []string{getVerb, listVerb, watchVerb, createVerb, updateVerb, patchVerb, deleteVerb} {
+		args := append([]string{authCommand, canICommand, verb, resource}, applierArgs...)
+		Expect(managerCanIWithArgs(args, "")).To(BeFalse(),
+			"remote Applier should not be allowed to %s registrations", verb)
+	}
+	applierCreateArgs := append([]string{createVerb}, applierArgs...)
+	sampleMCR := "config/samples/hyperfleet_v1alpha1_managementclusterregistration.yaml"
+	applierCreateArgs = append(applierCreateArgs, "-f", sampleMCR)
+	output, createErr := utils.Run(exec.Command("kubectl", applierCreateArgs...))
+	Expect(createErr).To(HaveOccurred())
+	Expect(output).To(ContainSubstring("Forbidden"))
+
 	if kindMode {
 		for _, binding := range []struct{ name, role, user string }{
 			{"registration-e2e-editor", "edit", editUser},
@@ -72,14 +89,10 @@ func checkRegistrationAdministration() {
 			})
 		}
 
-		By("rejecting remote self-registration and generic roles without OLM aggregation")
-		for _, subject := range []string{editUser, viewUser, "system:serviceaccount:management-cluster:applier"} {
+		By("rejecting generic edit/view roles without OLM aggregation")
+		for _, subject := range []string{editUser, viewUser} {
 			identityArgs := []string{asFlag, subject, asGroupFlag, authenticatedGroup}
-			if strings.HasPrefix(subject, "system:serviceaccount:") {
-				identityArgs = append(identityArgs, asGroupFlag, serviceAccountsGroup,
-					asGroupFlag, serviceAccountsGroup+":"+strings.Split(subject, ":")[2])
-			}
-			for _, verb := range []string{getVerb, listVerb, watchVerb, createVerb, updateVerb, patchVerb, "delete"} {
+			for _, verb := range []string{getVerb, listVerb, watchVerb, createVerb, updateVerb, patchVerb, deleteVerb} {
 				args := append([]string{authCommand, canICommand, verb, resource}, identityArgs...)
 				Expect(managerCanIWithArgs(args, "")).To(BeFalse())
 			}
@@ -103,7 +116,7 @@ func checkRegistrationAdministration() {
 	_, err = utils.Run(exec.Command("kubectl", patchVerb, resource, "mc-01", asFlag, adminUser,
 		"--type=merge", "-p", `{"spec":{"partition":"mc-02"}}`))
 	Expect(err).NotTo(HaveOccurred())
-	output, err := utils.Run(exec.Command("kubectl", "get", resource, "mc-01", asFlag, adminUser,
+	output, err = utils.Run(exec.Command("kubectl", "get", resource, "mc-01", asFlag, adminUser,
 		"-o", "jsonpath={.spec.partition}"))
 	Expect(err).NotTo(HaveOccurred())
 	Expect(strings.TrimSpace(output)).To(Equal("mc-02"))
