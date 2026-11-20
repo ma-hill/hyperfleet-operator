@@ -40,9 +40,6 @@ import (
 	"github.com/openshift-hyperfleet/hyperfleet-operator/test/utils"
 )
 
-// namespace where the project is deployed in
-const namespace = "hyperfleet-system"
-
 // serviceAccountName created for the project
 const serviceAccountName = "hyperfleet-operator-controller-manager"
 
@@ -90,12 +87,11 @@ const cleanupTimeout = 30 * time.Second
 var _ = Describe("hyperfleet-operator", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
+	// In kind mode, create the operator namespace with the restricted PSA
+	// label, install CRDs, and deploy the operator.
 	BeforeAll(func() {
 		if kindMode {
-			By("creating manager namespace")
+			By("creating operator namespace")
 			cmd := exec.Command("kubectl", "create", "ns", namespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
@@ -111,17 +107,17 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
-			By("deploying the controller-manager")
+			By("deploying the operator")
 			cmd = exec.Command("make", "deploy", fmt.Sprintf("OPERATOR_IMG=%s", kindOperatorImg),
 				fmt.Sprintf("RELATED_IMAGE_HYPERFLEET_OPERATOR=%s", kindOperatorImg))
 			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the operator")
 		}
 
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
+	// Clean up test-created resources; in kind mode also undeploy the
+	// operator, uninstall CRDs, and remove the namespace.
 	AfterAll(func() {
 		var cleanupErrors []error
 		runCleanup := func(step, command string, args ...string) {
@@ -148,9 +144,8 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 		runCleanup("cleaning up the e2e metrics reader binding",
 			"kubectl", "delete", "clusterrolebinding", metricsReaderBinding, "--ignore-not-found=true", "--wait=false")
 
-		// Only cleanup controller-manager + resources + namespace if kindMode
 		if kindMode {
-			runCleanup("undeploying the controller-manager",
+			runCleanup("undeploying the operator",
 				"make", "undeploy", "ignore-not-found=true")
 			runCleanup("uninstalling CRDs",
 				"make", "uninstall", "ignore-not-found=true")
@@ -775,10 +770,13 @@ func generateMetricsServingCertificate(
 }
 
 const (
+	serviceAccountsGroup = "system:serviceaccounts"
+	authenticatedGroup   = "system:authenticated"
+)
+
+var (
 	managerSubject                 = "system:serviceaccount:" + namespace + ":" + serviceAccountName
-	serviceAccountsGroup           = "system:serviceaccounts"
 	namespacedServiceAccountsGroup = serviceAccountsGroup + ":" + namespace
-	authenticatedGroup             = "system:authenticated"
 )
 
 // managerCanI reports whether the controller manager is authorized for a resource action.

@@ -35,6 +35,7 @@ var (
 	skipCertManagerInstall        bool
 	kindOperatorImg               string
 	isCertManagerAlreadyInstalled bool = false
+	namespace                     string
 )
 
 func init() {
@@ -44,12 +45,16 @@ func init() {
 		"name of the operator image to use for testing")
 	flag.BoolVar(&skipCertManagerInstall, "skip-cert-manager-install", false,
 		"skip CertManager installation during test setup")
+	flag.StringVar(&namespace, "namespace", "hyperfleet-system", "namespace of hyperfleet components")
 }
 
-// TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
-// temporary environment to validate project changes with the purposed to be used in CI jobs.
-// The default setup requires Kind, builds/loads the Manager Docker image locally, and installs
-// CertManager.
+// TestE2E runs the end-to-end test suite for the HyperFleet Operator.
+//
+// In kind mode (--kind-mode=true) the suite builds the operator image, installs
+// CRDs, and deploys the manager into the target cluster before running specs.
+//
+// In CI mode (--kind-mode=false) the suite expects the operator to be fully
+// installed and running already (namespace, CRDs, RBAC, and deployment).
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting hyperfleet-operator integration test suite\n")
@@ -69,10 +74,7 @@ var _ = BeforeSuite(func() {
 		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the operator image into Kind")
 	}
 
-	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
-	// To prevent errors when tests run in environments with CertManager already installed,
-	// we check for its presence before execution.
-	// Setup CertManager before the suite if not skipped and if not already installed
+	// Install CertManager unless already present or explicitly skipped.
 	if !skipCertManagerInstall {
 		By("checking if cert manager is installed already")
 		isCertManagerAlreadyInstalled = utils.IsCertManagerCRDsInstalled()
@@ -97,7 +99,7 @@ func managerImageBuildArgs(operatorImg string, arch string, containerTool string
 }
 
 var _ = AfterSuite(func() {
-	// Teardown CertManager after the suite if not skipped and if it was not already installed
+	// Uninstall CertManager only if this suite installed it.
 	if !skipCertManagerInstall && !isCertManagerAlreadyInstalled {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling CertManager...\n")
 		utils.UninstallCertManager()

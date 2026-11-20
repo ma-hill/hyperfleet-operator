@@ -106,10 +106,6 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 ##@ E2E Cluster Testing
 
-# Default to false, since we want to allows install cert-manager unless specified not to
-# In test-e2e-ci, don't even give an option since we always want ci to install cert-manager
-SKIP_CERT_MANAGER_INSTALL ?= false
-
 # Kind Targets
 KIND_CLUSTER ?= hyperfleet-operator-test-e2e
 
@@ -145,20 +141,30 @@ pre-e2e-checks: ## Check for required environment variables and files for e2e te
 		exit 1; \
 	fi
 
+# Within test-e2e-kind, --skip-cert-manager-install=false; enable only when a compatible
+# cert-manager is already present.
+SKIP_CERT_MANAGER_INSTALL ?= false
 .PHONY: test-e2e-kind
-test-e2e-kind: setup-kind-cluster manifests generate fmt vet pre-e2e-checks ## Run the e2e tests in a self-contained Kind cluster (created and deleted by the target).
+test-e2e-kind: setup-kind-cluster manifests generate fmt vet pre-e2e-checks ## Run the e2e tests in a kind-cluster
 	KIND_CLUSTER=$(KIND_CLUSTER) $(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=true --skip-cert-manager-install=$(SKIP_CERT_MANAGER_INSTALL)
 	$(MAKE) destroy-kind-cluster KIND_CLUSTER=$(KIND_CLUSTER)
 
+# Requires KUBECONFIG pointing at a cluster where the operator is already
+# running (e.g. installed via operator-sdk run bundle). The bundle install
+# provides the namespace, CRDs, RBAC, and deployment; this target does not
+# create or install any of them.
 .PHONY: test-e2e-ci
-test-e2e-ci: manifests generate fmt vet pre-e2e-checks ## Run the e2e tests against the cluster KUBECONFIG points at. Requires KUBECONFIG; assumes the operator is already installed.
-	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=false
+test-e2e-ci: manifests generate fmt vet pre-e2e-checks ## Run the e2e tests against a cluster with the operator already installed. Requires KUBECONFIG.
+	$(GO) test ./test/e2e/ -v -ginkgo.v --kind-mode=false --namespace=$(OPERATOR_NAMESPACE)
 
 ##@ Upgrade Testing
 
-# Prepared-cluster OLM tests consume published artifacts. They must not invoke
-# setup-test-e2e, build a replacement manager, or install locally generated CRDs.
-# The build tag keeps live execution out of ordinary unit tests and make test.
+# The OLM upgrade suite runs against a prepared cluster and consumes
+# published bundle/catalog images.
+# It does not run the operator image build, test-e2e-kind, or deploy local CRDS
+# Only the live entrypoint (upgrade_e2e_test.go) carries the upgrade_e2e build
+# tag, so `make test` runs the package's helper unit tests while the
+# 2h+ live upgrade is excluded unless invoked via -tags=upgrade_e2e.
 export KUBECONFIG OLM_CATALOG_IMAGE UPGRADE_FROM_BUNDLE UPGRADE_TO_BUNDLE OLM_CHANNEL
 export UPGRADE_SCENARIO UPGRADE_NAMESPACE UPGRADE_TIMEOUT UPGRADE_RETAIN_ON_SUCCESS OPM PODMAN ARTIFACT_DIR
 

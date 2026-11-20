@@ -81,7 +81,7 @@ func TestManagerImageBuildArgs(t *testing.T) {
 		{arch: "amd64", containerTool: containerToolPodman, wantSuffix: containerToolPodman},
 		{arch: "amd64", containerTool: containerToolDocker, wantSuffix: containerToolDocker},
 	} {
-		t.Run(tc.wantSuffix, func(t *testing.T) {
+		t.Run(tc.arch+tc.containerTool, func(t *testing.T) {
 			want := []string{
 				"image",
 				fmt.Sprintf("OPERATOR_IMG=%s", kindOperatorImg),
