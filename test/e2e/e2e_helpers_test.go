@@ -186,11 +186,17 @@ func TestParseCanIOutput(t *testing.T) {
 func TestManagerCanIArgs(t *testing.T) {
 	t.Parallel()
 
+	// managerCanIArgs reads the package-level namespace var at call time;
+	// pin it to a known value so the test is independent of --namespace.
+	origNamespace := namespace
+	namespace = "test-ns"
+	t.Cleanup(func() { namespace = origNamespace })
+
 	want := []string{
 		"auth", "can-i", getVerb, "deployments.apps",
-		"--as", "system:serviceaccount:hyperfleet-system:hyperfleet-operator-controller-manager",
+		"--as", "system:serviceaccount:test-ns:hyperfleet-operator-controller-manager",
 		asGroupFlag, "system:serviceaccounts",
-		asGroupFlag, "system:serviceaccounts:hyperfleet-system",
+		asGroupFlag, "system:serviceaccounts:test-ns",
 		asGroupFlag, "system:authenticated",
 	}
 	if got := managerCanIArgs(getVerb, "deployments.apps"); !reflect.DeepEqual(got, want) {
