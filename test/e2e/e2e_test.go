@@ -87,20 +87,15 @@ const cleanupTimeout = 30 * time.Second
 var _ = Describe("hyperfleet-operator", Ordered, func() {
 	var controllerPodName string
 
-	// In kind mode, create the operator namespace with the restricted PSA
-	// label, install CRDs, and deploy the operator.
+	// In kind mode, create the operator namespace, install CRDs, and deploy
+	// the operator. The restricted PSA label is applied unconditionally so
+	// that CI clusters also reject non-compliant pods.
 	BeforeAll(func() {
 		if kindMode {
 			By("creating operator namespace")
 			cmd := exec.Command("kubectl", "create", "ns", namespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
-
-			By("labeling the namespace to enforce the restricted security policy")
-			cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-				"pod-security.kubernetes.io/enforce=restricted")
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
 			By("installing CRDs")
 			cmd = exec.Command("make", "install")
@@ -114,6 +109,11 @@ var _ = Describe("hyperfleet-operator", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred(), "Failed to deploy the operator")
 		}
 
+		By("enforcing the restricted pod security policy on the operator namespace")
+		cmd := exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+			"pod-security.kubernetes.io/enforce=restricted")
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 	})
 
 	// Clean up test-created resources; in kind mode also undeploy the
